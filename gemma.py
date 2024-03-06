@@ -63,7 +63,7 @@ for emb in tqdm(input_embeddings, desc="Processing embeddings", unit="embeddings
     normalized_output = torch.sigmoid(output_tokens)
     scaled_output = (normalized_output * 350) + 255649
 
-    rounded_output = torch.round(scaled_output)
+    rounded_output = torch.round(scaled_output).to(torch.int)
     result_embeddings.append(rounded_output)
 
 
@@ -71,3 +71,6 @@ for emb in tqdm(input_embeddings, desc="Processing embeddings", unit="embeddings
 transformed_embeddings = torch.stack(result_embeddings, dim=0)
 
 print(transformed_embeddings)
+
+print(tokenizer.decode(transformed_embeddings[0]))
+print(tokenizer.decode(transformed_embeddings[0][0]))
