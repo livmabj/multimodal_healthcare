@@ -56,15 +56,15 @@ word_embs = gemma.get_input_embeddings().weight[input_ids.input_ids].to("cuda")
 
 batch_size = 8
 x_train, x_val, y_train, y_val = data_split(df, pkl_list)
-x_train_small, x_val_small, y_train_small, y_val_small = data_split(df.iloc[:500], pkl_list)
-train_set = CustomDataset(x_train_small, y_train_small)
-val_set = CustomDataset(x_val_small, y_val_small)
+# x_train_small, x_val_small, y_train_small, y_val_small = data_split(df.iloc[:500], pkl_list)
+train_set = CustomDataset(x_train, y_train)
+val_set = CustomDataset(x_val, y_val)
 
 train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=5)
 val_loader = DataLoader(val_set, batch_size=batch_size, num_workers=5)
 
-w0 = 1 - sum(y_train_small == 0)/len(y_train_small)
-w1 = 1 - sum(y_train_small == 1)/len(y_train_small)
+w0 = 1 - sum(y_train == 0)/len(y_train)
+w1 = 1 - sum(y_train == 1)/len(y_train)
 weights = torch.tensor([w0, w1], dtype = torch.float).to("cuda")
 
 model = ProjectionNN()
