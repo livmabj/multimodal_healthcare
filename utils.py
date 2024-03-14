@@ -17,6 +17,10 @@ from sklearn.model_selection import train_test_split
 from functools import partial
 from peft import LoraConfig, TaskType, get_peft_model, get_peft_config
 
+
+tokenizer = AutoTokenizer.from_pretrained("google/gemma-2b-it")
+tokenizer.pad_token_id = tokenizer.eos_token_id
+
 embedding_size = 1024
 projection_size = 6
 
@@ -147,7 +151,7 @@ def train_epoch(model, gemma, optimizer, loss_fn, train_loader, device):
 
     return model, train_loss_batches, train_acc_batches
 
-def validate(model, gemma, loss_fn, val_loader, device, word_embs):
+def validate(model, gemma, loss_fn, val_loader, device):
     val_loss_cum = 0
     val_acc_cum = 0
     gemma.eval()
@@ -191,7 +195,7 @@ def training_loop(model, gemma, optimizer, loss_fn, train_loader, val_loader, nu
                                                    loss_fn,
                                                    train_loader,
                                                    device)
-        val_loss, val_acc = validate(model, loss_fn, val_loader, device)
+        val_loss, val_acc = validate(model, gemma, loss_fn, val_loader, device)
         print(f"Epoch {epoch}/{num_epochs}: "
               f"Train loss: {sum(train_loss)/len(train_loss):.3f}, "
               f"Train acc.: {sum(train_acc)/len(train_acc):.3f}, "

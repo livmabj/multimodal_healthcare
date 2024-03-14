@@ -17,6 +17,8 @@ from sklearn.model_selection import train_test_split
 
 from functools import partial
 from peft import LoraConfig, TaskType, get_peft_model, get_peft_config
+import os
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # Filepath to embeddings
 fname = "/mnt/mimic/data/HAIM/mimic_extras/embeddings.csv"
@@ -24,10 +26,14 @@ fname = "/mnt/mimic/data/HAIM/mimic_extras/embeddings.csv"
 # LoRA parameter efficient fine-tuning
 # Parameters are freezed and small submodules with low-rank matrices ar inserted at the target layers.
 # initialization of model
-quantization_config = BitsAndBytesConfig(load_in_4bit=True)
+quantization_config = BitsAndBytesConfig(load_in_4bit=True, 
+                                         bnb_4bit_use_double_quant=True,
+                                         bnb_4bit_quant_type="nf4",
+                                         bnb_4bit_compute_dtype=torch.bfloat16)
+
 tokenizer = AutoTokenizer.from_pretrained("google/gemma-2b-it")
 tokenizer.pad_token_id = tokenizer.eos_token_id
-gemma = AutoModelForCausalLM.from_pretrained("google/gemma-2b-it", device_map="auto", quantization_config=quantization_config,attn_implementation="sdpa")
+gemma = AutoModelForCausalLM.from_pretrained("google/gemma-2b-it", device_map="auto", quantization_config=quantization_config)
 lora_config = LoraConfig(
     r=8,
     target_modules=["q_proj", "o_proj", "k_proj", "v_proj", "gate_proj", "up_proj", "down_proj"],
@@ -66,8 +72,8 @@ x_train, x_val, x_test, y_train, y_val, y_test, = data_split(df, pkl_list)
 bsz = 8
 
 Trainset = CustomDataset(x_train.tolist(), y_train)
-Valset = CustomDataset(x_val, y_val)
-Testset = CustomDataset(x_test, y_test)
+Valset = CustomDataset(x_val.tolist(), y_val)
+Testset = CustomDataset(x_test.tolist(), y_test)
 
 Train_loader = DataLoader(Trainset, batch_size=bsz, collate_fn=collate_batch)
 Val_loader = DataLoader(Valset, batch_size=bsz, collate_fn=collate_batch)
