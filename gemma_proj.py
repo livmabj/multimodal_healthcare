@@ -67,8 +67,8 @@ val_loader = DataLoader(val_set, batch_size=batch_size, num_workers=5)
 
 
 # Since the classes are very imbalanced, we weigh the classes to increase performance
-w0 = 1 - sum(y_train == 0)/len(y_train)
-w1 = 1 - sum(y_train == 1)/len(y_train)
+w0 = len(y_train_small)/(2*sum(y_train_small == 0))
+w1 = len(y_train_small)/(2*sum(y_train_small == 1))
 weights = torch.tensor([w0, w1], dtype = torch.float).to("cuda")
 
 
@@ -77,7 +77,7 @@ model = ProjectionNN()
 optimizer = optim.Adam(model.parameters(), lr=0.001)
 loss_fn = nn.CrossEntropyLoss(weight=weights)
 
-num_epochs = 5
+num_epochs = 10
 
 # Run training
 fine_tuned, train_losses, train_accs, val_losses, val_accs = training_loop(model, gemma, optimizer, loss_fn, train_loader, val_loader, num_epochs, word_embs)
