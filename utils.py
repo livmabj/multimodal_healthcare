@@ -61,7 +61,7 @@ def custom_output(emb, gemma):
     outputs = gemma(inputs_embeds=emb)
     noyes = [956, 3276]
     logits = outputs['logits']
-    logits = logits[:,1,noyes]
+    logits = logits[:,-6:,noyes]
     return logits
 
 
