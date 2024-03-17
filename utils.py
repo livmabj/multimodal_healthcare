@@ -61,7 +61,8 @@ def custom_output(emb, gemma):
     outputs = gemma(inputs_embeds=emb)
     noyes = [956, 3276]
     logits = outputs['logits']
-    logits = logits[:,-6:,noyes]
+    logits = logits[:,-6:,noyes].mean(dim=1)
+    logits = torch.softmax(logits, dim=-1)
     return logits
 
 
