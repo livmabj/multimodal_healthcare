@@ -5,6 +5,7 @@ from torch.utils.data import Dataset, DataLoader
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
+import pickle
 
 EMBEDDING_SIZE = 1024
 PROJECTION_SIZE = 6
@@ -144,3 +145,24 @@ def training_loop(model, gemma, optimizer, loss_fn, train_loader, val_loader, nu
         val_losses.append(val_loss)
         val_accs.append(val_acc)
     return model, train_losses, train_accs, val_losses, val_accs
+
+
+def save_test_set(df,pkl_list):
+    train_id, test_id = train_test_split(pkl_list, test_size=0.05)
+    
+    train_idx = df[df['haim_id'].isin(train_id)]['haim_id'].tolist()
+    test_idx = df[df['haim_id'].isin(test_id)]['haim_id'].tolist()
+
+    df_train = df[df['haim_id'].isin(train_idx)]
+
+    x_test = df[df['haim_id'].isin(test_idx)].drop(['haim_id','y'],axis=1).values
+
+    y_test = df[df['haim_id'].isin(test_idx)]['y'].values
+
+    with open('/mnt/mimic/data/HAIM/mimic_extras/x_test.pkl', 'wb') as f1:
+        pickle.dump(x_test, f1)
+
+    with open('/mnt/mimic/data/HAIM/mimic_extras/y_test.pkl', 'wb') as f2:
+        pickle.dump(y_test, f2)
+
+    return df_train
