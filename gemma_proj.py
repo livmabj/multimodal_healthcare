@@ -57,6 +57,7 @@ word_embs = gemma.get_input_embeddings().weight[input_ids.input_ids].to("cuda")
 
 # Load train/val sets and create data loaders
 batch_size = 8
+
 x_train, x_val, y_train, y_val = data_split(df, pkl_list)
 # x_train_small, x_val_small, y_train_small, y_val_small = data_split(df.iloc[:500], pkl_list)
 train_set = CustomDataset(x_train, y_train)
@@ -67,8 +68,8 @@ val_loader = DataLoader(val_set, batch_size=batch_size, num_workers=5)
 
 
 # Since the classes are very imbalanced, we weigh the classes to increase performance
-w0 = len(y_train_small)/(2*sum(y_train_small == 0))
-w1 = len(y_train_small)/(2*sum(y_train_small == 1))
+w0 = len(y_train)/(2*sum(y_train == 0))
+w1 = len(y_train)/(2*sum(y_train == 1))
 weights = torch.tensor([w0, w1], dtype = torch.float).to("cuda")
 
 
