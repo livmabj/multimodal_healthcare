@@ -62,8 +62,8 @@ def custom_output(emb, gemma):
     noyes = [956, 3276]
     logits = outputs['logits']
     logits = logits[:,-6:,noyes].mean(dim=1)
-    logits = torch.softmax(logits, dim=-1)
-    return logits
+    softmax = torch.softmax(logits, dim=-1)
+    return softmax
 
 
 def output_to_label(logits):
