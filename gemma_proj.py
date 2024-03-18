@@ -3,6 +3,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torchvision.ops import sigmoid_focal_loss as focal_loss
 from torch.utils.data import Dataset, DataLoader
 import pandas as pd
 import numpy as np

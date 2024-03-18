@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
+from torchvision.ops import sigmoid_focal_loss as focal_loss
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
