@@ -44,18 +44,22 @@ class CustomDataset(Dataset):
     
 
 def data_split(df, pkl_list):
-    train_id, test_id = train_test_split(pkl_list, test_size=0.3)
-    
+    train_id, val_id = train_test_split(pkl_list, test_size=0.3, random_state=None)
+    train_id, test_id = train_test_split(train_id, test_size=0.05, random_state=None)
+
     train_idx = df[df['haim_id'].isin(train_id)]['haim_id'].tolist()
+    val_idx = df[df['haim_id'].isin(val_id)]['haim_id'].tolist()
     test_idx = df[df['haim_id'].isin(test_id)]['haim_id'].tolist()
 
     x_train = df[df['haim_id'].isin(train_idx)].drop(['haim_id','y'],axis=1).values
+    x_val = df[df['haim_id'].isin(val_idx)].drop(['haim_id','y'],axis=1).values
     x_test = df[df['haim_id'].isin(test_idx)].drop(['haim_id','y'],axis=1).values
 
     y_train = df[df['haim_id'].isin(train_idx)]['y'].values
+    y_val = df[df['haim_id'].isin(val_idx)]['y'].values
     y_test = df[df['haim_id'].isin(test_idx)]['y'].values
 
-    return x_train, x_test, y_train, y_test
+    return x_train, x_val, x_test, y_train, y_val, y_test
 
 
 def custom_output(emb, gemma):
