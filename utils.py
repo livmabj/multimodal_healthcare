@@ -40,29 +40,60 @@ class ProjectionNN(nn.Module):
         x = x.view(-1,6,2048)
         return x
 
-def data_split(df, pkl_list, test_size=0.3, validation_size=0.1, random_state=None):
-    # Split into training and test sets
-    train_set, test_set = train_test_split(pkl_list, test_size=test_size, random_state=random_state)
+class DataSplit():
 
-    # Further split the training set into training and validation sets
-    train_set, validation_set = train_test_split(train_set, test_size=validation_size, random_state=random_state)
+    def __init__(self, df):
+        self.df = df
+        self.types = ['vd_', 'vp_', 'vmd_', 'ts_ce_', 'ts_le_', 'ts_pe_', 'n_rad_']
+        self.partition = None
 
-    train_idx = df[df['haim_id'].isin(train_set)]['haim_id'].tolist()
-    validation_idx = df[df['haim_id'].isin(validation_set)]['haim_id'].tolist()
-    test_idx = df[df['haim_id'].isin(test_set)]['haim_id'].tolist()
+    def partitiondata(self, partition):
+        self.pkl_list = []
+        if partition == 'mortality':
+            condition_death_small48 = (self.df['img_length_of_stay'] < 48) & (self.df['death_status'] == 1)
 
-    x_train = df[df['haim_id'].isin(train_idx)].drop(['haim_id', 'y'], axis=1).values
-    x_validation = df[df['haim_id'].isin(validation_idx)].drop(['haim_id', 'y'], axis=1).values
-    x_test = df[df['haim_id'].isin(test_idx)].drop(['haim_id', 'y'], axis=1).values
+            y = [0]*len(self.df)
+            for i, condition in enumerate(condition_death_small48):
+                if condition:
+                    y[i] = 1
 
-    y_train = df[df['haim_id'].isin(train_idx)]['y'].values
-    y_train = [' ###ANSWER: No' if value == 0 else ' ###ANSWER: Yes' for value in y_train]
-    y_validation = df[df['haim_id'].isin(validation_idx)]['y'].values
-    y_validation = [' ###ANSWER: No' if value == 0 else ' ###ANSWER: Yes' for value in y_validation]
-    y_test = df[df['haim_id'].isin(test_idx)]['y'].values
-    y_test = [' ###ANSWER: No' if value == 0 else ' ###ANSWER: Yes' for value in y_test]
+        if partition == 'los':
+            condition_alive_small48 = self.df[((self.df['img_length_of_stay'] < 48) & (self.df['death_status'] == 0))]
 
-    return x_train, x_validation, x_test, y_train, y_validation, y_test
+            y = [0]*len(self.df)
+            for i, condition in enumerate(condition_alive_small48):
+                if condition:
+                    y[i] = 1
+
+        self.df['y'] = y
+
+    def get_data(self, partition, test_size=0.3, validation_size=0.1, random_state=None):
+
+        self.partition = partition
+
+        self.partitiondata(partition)
+        pkl_list = self.df['haim_id'].unique().tolist()
+
+        # Split into training and test sets
+        train_set, test_set = train_test_split(pkl_list, test_size=test_size, random_state=random_state)
+
+        remaining_data_size = 1.0 - test_size
+        validation_size = validation_size*remaining_data_size
+
+        # Further split the training set into training and validation sets
+        train_set, validation_set = train_test_split(train_set, test_size=validation_size, random_state=random_state)
+
+        train_idx = self.df[self.df['haim_id'].isin(train_set)]['haim_id'].tolist()
+        validation_idx = self.df[self.df['haim_id'].isin(validation_set)]['haim_id'].tolist()
+        test_idx = self.df[self.df['haim_id'].isin(test_set)]['haim_id'].tolist()
+
+        self.x_train = {t: self.df[self.df['haim_id'].isin(train_idx)].filter(regex='^'+t).values for t in self.types}
+        self.x_validation = {t: self.df[self.df['haim_id'].isin(validation_idx)].filter(regex='^'+t).values for t in self.types}
+        self.x_test = {t: self.df[self.df['haim_id'].isin(test_idx)].filter(regex='^'+t).values for t in self.types}
+
+        self.y_train = [' No' if value == 0 else ' Yes' for value in self.df[self.df['haim_id'].isin(train_idx)]['y'].values]
+        self.y_validation = [' No' if value == 0 else ' Yes' for value in self.df[self.df['haim_id'].isin(validation_idx)]['y'].values]
+        self.y_test = [' No' if value == 0 else ' Yes' for value in self.df[self.df['haim_id'].isin(test_idx)]['y'].values]
 
 # dataset for generative
 
@@ -80,7 +111,6 @@ class CustomDataset(Dataset):
         emb = self.embedding[idx]
         inst = self.instruction
         sample = {"Emb": emb, "Class": label, 'Inst': inst}
-        #print(sample)
         return sample
 
 # collate_batch for generative

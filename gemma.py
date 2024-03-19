@@ -49,32 +49,17 @@ gemma = get_peft_model(gemma, lora_config)
 # Get the data
 
 df = pd.read_csv(fname)
-condition_death_small48 = (df['img_length_of_stay'] < 48) & (df['death_status'] == 1)
-condition_alive_big48 = (df['img_length_of_stay'] >= 48) & (df['death_status'] == 0)
-condition_death_big48 = (df['img_length_of_stay'] >= 48) & (df['death_status'] == 1)
 
+Data = DataSplit(df)
 
-y = [0]*len(df)
-for i, condition in enumerate(condition_death_small48):
-    if condition:
-        y[i] = 1
-
-vd_cols = df.filter(regex='^vd_')
-y_col = pd.Series(y, name='y')
-haim_col = df[['haim_id']]
-df = pd.concat([haim_col, vd_cols, y_col], axis=1)
-
-pkl_list = df['haim_id'].unique().tolist()
-
-
-x_train, x_val, x_test, y_train, y_val, y_test, = data_split(df, pkl_list)
+Data.get_data('mortality')
 
 # Create dataset and dataloader
 bsz = 8
 
-Trainset = CustomDataset(x_train.tolist(), y_train)
-Valset = CustomDataset(x_val.tolist(), y_val)
-Testset = CustomDataset(x_test.tolist(), y_test)
+Trainset = CustomDataset(Data.x_train.tolist(), Data.y_train)
+Valset = CustomDataset(Data.x_validation.tolist(), Data.y_validation)
+Testset = CustomDataset(Data.x_test.tolist(), Data.y_test)
 
 Train_loader = DataLoader(Trainset, batch_size=bsz, collate_fn=collate_batch)
 Val_loader = DataLoader(Valset, batch_size=bsz, collate_fn=collate_batch)
