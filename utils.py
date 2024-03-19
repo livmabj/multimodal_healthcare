@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
-from torchvision.ops import sigmoid_focal_loss as focal_loss
+from focal_loss.focal_loss import FocalLoss
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
@@ -44,8 +44,8 @@ class CustomDataset(Dataset):
     
 
 def data_split(df, pkl_list):
-    train_id, val_id = train_test_split(pkl_list, test_size=0.3, random_state=None)
-    train_id, test_id = train_test_split(train_id, test_size=0.05, random_state=None)
+    train_id, val_id = train_test_split(pkl_list, test_size=0.3, random_state=42)
+    val_id, test_id = train_test_split(val_id, test_size=0.25, random_state=42)
 
     train_idx = df[df['haim_id'].isin(train_id)]['haim_id'].tolist()
     val_idx = df[df['haim_id'].isin(val_id)]['haim_id'].tolist()
@@ -67,8 +67,7 @@ def custom_output(emb, gemma):
     noyes = [956, 3276]
     logits = outputs['logits']
     logits = logits[:,-6:,noyes].mean(dim=1)
-    softmax = torch.softmax(logits, dim=-1)
-    return softmax
+    return logits
 
 
 def output_to_label(logits):

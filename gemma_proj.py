@@ -3,7 +3,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torchvision.ops import sigmoid_focal_loss as focal_loss
+from focal_loss.focal_loss import FocalLoss
 from torch.utils.data import Dataset, DataLoader
 import pandas as pd
 import numpy as np
@@ -51,7 +51,7 @@ df = pd.concat([haim_col, vd_cols, y_col], axis=1)
 pkl_list = df['haim_id'].unique().tolist()
 
 # Initial prompt
-input_text = "Given this input, is it more likely than not that the patient will die?"
+input_text = "Based on the following image, output yes if the patient is likely to die and no otherwise."
 input_ids = tokenizer(input_text, return_tensors="pt").to("cuda")
 word_embs = gemma.get_input_embeddings().weight[input_ids.input_ids].to("cuda")
 
@@ -59,7 +59,7 @@ word_embs = gemma.get_input_embeddings().weight[input_ids.input_ids].to("cuda")
 # Load train/val sets and create data loaders
 batch_size = 8
 
-x_train, x_val, y_train, y_val = data_split(df, pkl_list)
+x_train, x_val, _, y_train, y_val, _ = data_split(df, pkl_list)
 # x_train_small, x_val_small, y_train_small, y_val_small = data_split(df.iloc[:500], pkl_list)
 train_set = CustomDataset(x_train, y_train)
 val_set = CustomDataset(x_val, y_val)
@@ -78,6 +78,7 @@ weights = torch.tensor([w0, w1], dtype = torch.float).to("cuda")
 model = ProjectionNN()
 optimizer = optim.Adam(model.parameters(), lr=0.001)
 loss_fn = nn.CrossEntropyLoss(weight=weights)
+#loss_fn = FocalLoss(gamma=3)
 
 num_epochs = 10
 
@@ -86,18 +87,18 @@ fine_tuned, train_losses, train_accs, val_losses, val_accs = training_loop(model
 
 
 # Save model and results
-torch.save(fine_tuned, 'finetuned.pth')
+torch.save(fine_tuned, 'finetuned_bce_001.pth')
 
-with open('train_losses.pkl', 'wb') as f1:
+with open('train_losses_bce_001.pkl', 'wb') as f1:
     pickle.dump(train_losses, f1)
 
-with open('train_accs.pkl', 'wb') as f2:
+with open('train_accs_bce_001.pkl', 'wb') as f2:
     pickle.dump(train_accs, f2)
 
-with open('val_losses.pkl', 'wb') as f3:
+with open('val_losses_bce_001.pkl', 'wb') as f3:
     pickle.dump(val_losses, f3)
 
-with open('val_accs.pkl', 'wb') as f4:
+with open('val_accs_bce_001.pkl', 'wb') as f4:
     pickle.dump(val_accs, f4)
 
     
