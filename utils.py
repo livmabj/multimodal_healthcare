@@ -125,29 +125,34 @@ def train_epoch(model, gemma, optimizer, loss_fn, train_loader, device):
     train_loss_batches, train_acc_batches = [], []
     num_batches = len(train_loader)
     embedding_matrix = gemma.get_input_embeddings().weight
-    for batch_index, (mod, inst, label) in enumerate(train_loader, 1):
-        mod_embeddings = model(mod.to(device))
-        inst_list = [embedding_matrix[token_id] for token_id in inst.to(dtype=torch.long)]
-        label_list = [embedding_matrix[token_id] for token_id in label.to(dtype=torch.long)]
-        inst_embeddings = torch.stack(inst_list)
-        label_embeddings = torch.stack(label_list)
-        optimizer.zero_grad()
+    with tqdm(total=num_batches, desc="Training", leave=False) as pbar:
+        for batch_index, (mod, inst, label) in enumerate(train_loader, 1):
+            mod_embeddings = model(mod.to(device))
+            inst_list = [embedding_matrix[token_id] for token_id in inst.to(dtype=torch.long)]
+            label_list = [embedding_matrix[token_id] for token_id in label.to(dtype=torch.long)]
+            inst_embeddings = torch.stack(inst_list)
+            label_embeddings = torch.stack(label_list)
+            optimizer.zero_grad()
 
-        conc_emb = torch.cat([inst_embeddings.to(dtype=torch.float16), mod_embeddings, label_embeddings.to(dtype=torch.float16)], dim=1).to(device)
-        padded_target = left_padding(conc_emb, label, device)
-        output = gemma(inputs_embeds=conc_emb.to(dtype=torch.float16), labels=padded_target)
+            conc_emb = torch.cat([inst_embeddings.to(dtype=torch.float16), mod_embeddings, label_embeddings.to(dtype=torch.float16)], dim=1).to(device)
+            padded_target = left_padding(conc_emb, label, device)
+            output = gemma(inputs_embeds=conc_emb.to(dtype=torch.float16), labels=padded_target)
 
-        logits = output['logits'] #torch.Size([1, 31, 256000])
-        logits_masked, targets_masked = masking(logits, padded_target)
+            logits = output['logits'] #torch.Size([1, 31, 256000])
+            logits_masked, targets_masked = masking(logits, padded_target)
 
-        loss = loss_fn(logits_masked.squeeze(0), targets_masked)
-        loss.backward()
-        optimizer.step()
-        train_loss_batches.append(loss.item())
+            loss = loss_fn(logits_masked.squeeze(0), targets_masked)
+            loss.backward()
+            optimizer.step()
+            train_loss_batches.append(loss.item())
 
-        hard_preds = output_to_label(logits_masked)
-        acc_batch_avg = (hard_preds == targets_masked).float().mean().item()
-        train_acc_batches.append(acc_batch_avg)
+            hard_preds = output_to_label(logits_masked)
+            acc_batch_avg = (hard_preds == targets_masked).float().mean().item()
+            train_acc_batches.append(acc_batch_avg)
+
+            # Update progress bar every 500 iterations
+            if batch_index % 500 == 0 or batch_index == num_batches:
+                pbar.update(500 if batch_index + 500 < num_batches else num_batches - batch_index)
 
     return model, train_loss_batches, train_acc_batches
 
@@ -155,29 +160,36 @@ def validate(model, gemma, loss_fn, val_loader, device):
     val_loss_cum = 0
     val_acc_cum = 0
     gemma.eval()
+    num_batches = len(val_loader)
     embedding_matrix = gemma.get_input_embeddings().weight
     with torch.no_grad():
-        for batch_index, (mod, inst, label) in enumerate(val_loader, 1):
-            mod_embeddings = model(mod.to(device))
-            inst_list = [embedding_matrix[token_id] for token_id in inst.to(dtype=torch.long)]
-            label_list = [embedding_matrix[token_id] for token_id in label.to(dtype=torch.long)]
-            inst_embeddings = torch.stack(inst_list)
-            label_embeddings = torch.stack(label_list)
+        with tqdm(total=num_batches, desc="Validation", leave=False) as pbar:
+            for batch_index, (mod, inst, label) in enumerate(val_loader, 1):
+                mod_embeddings = model(mod.to(device))
+                inst_list = [embedding_matrix[token_id] for token_id in inst.to(dtype=torch.long)]
+                label_list = [embedding_matrix[token_id] for token_id in label.to(dtype=torch.long)]
+                inst_embeddings = torch.stack(inst_list)
+                label_embeddings = torch.stack(label_list)
 
-            conc_emb = torch.cat([inst_embeddings.to(dtype=torch.float16), mod_embeddings, label_embeddings.to(dtype=torch.float16)], dim=1).to(device)
-            padded_target = left_padding(conc_emb, label, device)
+                conc_emb = torch.cat([inst_embeddings.to(dtype=torch.float16), mod_embeddings, label_embeddings.to(dtype=torch.float16)], dim=1).to(device)
+                padded_target = left_padding(conc_emb, label, device)
 
-            output = gemma(inputs_embeds=conc_emb.to(dtype=torch.float16), labels=padded_target)
+                output = gemma(inputs_embeds=conc_emb.to(dtype=torch.float16), labels=padded_target)
 
-            logits = output['logits'] #torch.Size([1, 31, 256000])
-            logits_masked, targets_masked = masking(logits, padded_target)
+                logits = output['logits'] #torch.Size([1, 31, 256000])
+                logits_masked, targets_masked = masking(logits, padded_target)
 
 
-            loss = loss_fn(logits_masked.squeeze(0), targets_masked)
-            val_loss_cum += loss.item()
-            hard_preds = output_to_label(logits_masked)
-            acc_batch_avg = (hard_preds == targets_masked).float().mean().item()
-            val_acc_cum += acc_batch_avg
+                loss = loss_fn(logits_masked.squeeze(0), targets_masked)
+                val_loss_cum += loss.item()
+                hard_preds = output_to_label(logits_masked)
+                acc_batch_avg = (hard_preds == targets_masked).float().mean().item()
+                val_acc_cum += acc_batch_avg
+
+                # Update progress bar every 500 iterations
+                if batch_index % 500 == 0 or batch_index == num_batches:
+                    pbar.update(500 if batch_index + 500 < num_batches else num_batches - batch_index)
+                    
     return val_loss_cum/len(val_loader), val_acc_cum/len(val_loader)
 
 def training_loop(model, gemma, optimizer, loss_fn, train_loader, val_loader, num_epochs):

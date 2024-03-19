@@ -49,17 +49,18 @@ gemma = get_peft_model(gemma, lora_config)
 # Get the data
 
 df = pd.read_csv(fname)
-df_death_small48 = df[((df['img_length_of_stay'] < 48) & (df['death_status'] == 1))]
-df_alive_big48 = df[((df['img_length_of_stay'] >= 48) & (df['death_status'] == 0))]
-df_death_big48 = df[((df['img_length_of_stay'] >= 48) & (df['death_status'] == 1))]
+condition_death_small48 = (df['img_length_of_stay'] < 48) & (df['death_status'] == 1)
+condition_alive_big48 = (df['img_length_of_stay'] >= 48) & (df['death_status'] == 0)
+condition_death_big48 = (df['img_length_of_stay'] >= 48) & (df['death_status'] == 1)
 
-df_death_small48['y'] = 1
-df_alive_big48['y'] = 0
-df_death_big48['y'] = 0
-df = pd.concat([df_death_small48, df_alive_big48, df_death_big48], axis = 0)
+
+y = [0]*len(df)
+for i, condition in enumerate(condition_death_small48):
+    if condition:
+        y[i] = 1
 
 vd_cols = df.filter(regex='^vd_')
-y_col = df[['y']]
+y_col = pd.Series(y, name='y')
 haim_col = df[['haim_id']]
 df = pd.concat([haim_col, vd_cols, y_col], axis=1)
 
