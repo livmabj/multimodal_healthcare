@@ -29,26 +29,26 @@ gemma = AutoModelForCausalLM.from_pretrained("google/gemma-2b", device_map="auto
 # Read data & extract labels and features
 df = pd.read_csv(fname)
 
-condition_death_small48 = (df['img_length_of_stay'] < 48) & (df['death_status'] == 1)
-condition_alive_big48 = (df['img_length_of_stay'] >= 48) & (df['death_status'] == 0)
-condition_death_big48 = (df['img_length_of_stay'] >= 48) & (df['death_status'] == 1)
+###condition_death_small48 = (df['img_length_of_stay'] < 48) & (df['death_status'] == 1)
+###condition_alive_big48 = (df['img_length_of_stay'] >= 48) & (df['death_status'] == 0)
+###condition_death_big48 = (df['img_length_of_stay'] >= 48) & (df['death_status'] == 1)
 
-y = [0]*len(df)
-for i, condition in enumerate(condition_death_small48):
-    if condition:
-        y[i] = 1
+###y = [0]*len(df)
+###for i, condition in enumerate(condition_death_small48):
+###    if condition:
+###        y[i] = 1
 
 # Use .loc to avoid SettingWithCopyWarning
 #df.loc[condition_death_small48, 'y'] = 1
 #df.loc[condition_alive_big48, 'y'] = 0
 #df.loc[condition_death_big48, 'y'] = 0
         
-vd_cols = df.filter(regex='^vd_')
-y_col = pd.Series(y, name='y')
-haim_col = df[['haim_id']]
-df = pd.concat([haim_col, vd_cols, y_col], axis=1)
+###vd_cols = df.filter(regex='^vd_')
+###y_col = pd.Series(y, name='y')
+###haim_col = df[['haim_id']]
+###df = pd.concat([haim_col, vd_cols, y_col], axis=1)
 
-pkl_list = df['haim_id'].unique().tolist()
+###pkl_list = df['haim_id'].unique().tolist()
 
 # Initial prompt
 input_text = "Based on the following image, output yes if the patient is likely to die and no otherwise."
@@ -59,18 +59,21 @@ word_embs = gemma.get_input_embeddings().weight[input_ids.input_ids].to("cuda")
 # Load train/val sets and create data loaders
 batch_size = 8
 
-x_train, x_val, _, y_train, y_val, _ = data_split(df, pkl_list)
+###x_train, x_val, _, y_train, y_val, _ = data_split(df, pkl_list)
 # x_train_small, x_val_small, y_train_small, y_val_small = data_split(df.iloc[:500], pkl_list)
-train_set = CustomDataset(x_train, y_train)
-val_set = CustomDataset(x_val, y_val)
+Data = DataSplit(df)
+Data.get_data('mortality')
+
+train_set = CustomDataset(Data.x_train['vd_'], Data.y_train)
+val_set = CustomDataset(Data.x_validation['vd_'], Data.y_validation)
 
 train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=5)
 val_loader = DataLoader(val_set, batch_size=batch_size, num_workers=5)
 
 
 # Since the classes are very imbalanced, we weigh the classes to increase performance
-w0 = len(y_train)/(2*sum(y_train == 0))
-w1 = len(y_train)/(2*sum(y_train == 1))
+w0 = len(Data.y_train)/(2*sum(Data.y_train == 0))
+w1 = len(Data.y_train)/(2*sum(Data.y_train == 1))
 weights = torch.tensor([w0, w1], dtype = torch.float).to("cuda")
 
 
