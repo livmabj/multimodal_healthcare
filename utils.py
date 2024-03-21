@@ -44,7 +44,7 @@ class DataSplit():
 
     def __init__(self, df):
         self.df = df
-        self.types = ['vd_', 'vp_', 'vmd_', 'ts_ce_', 'ts_le_', 'ts_pe_', 'n_rad_']
+        self.types = ['vd_', 'vp_', 'vmd_', 'vmp_' 'ts_ce_', 'ts_le_', 'ts_pe_', 'n_rad_']
         self.partition = None
 
     def partitiondata(self, partition):
