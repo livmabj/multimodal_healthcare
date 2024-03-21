@@ -9,7 +9,7 @@ from sklearn.model_selection import train_test_split
 import pickle
 
 EMBEDDING_SIZE = 1024
-PROJECTION_SIZE = 6
+PROJECTION_SIZE = 1
 
 
 class ProjectionNN(nn.Module):
@@ -25,7 +25,7 @@ class ProjectionNN(nn.Module):
         x = self.fc1(x)
         x = self.relu(x)
         x = self.fc2(x)
-        x = x.view(-1,6,2048)
+        x = x.view(-1,PROJECTION_SIZE,2048)
         return x
 
 
@@ -66,7 +66,7 @@ def custom_output(emb, gemma):
     outputs = gemma(inputs_embeds=emb)
     noyes = [956, 3276]
     logits = outputs['logits']
-    logits = logits[:,-6:,noyes].mean(dim=1)
+    logits = logits[:,-1:,noyes].mean(dim=1)
     return logits
 
 
@@ -76,7 +76,7 @@ def output_to_label(logits):
     return predicted_token_id
 
     
-def train_epoch(model, gemma, optimizer, loss_fn, train_loader, device, word_embs):
+def train_epoch(model, gemma, optimizer, loss_fn, train_loader, device):
     # Train:
     model.train()
     train_loss_batches, train_acc_batches = [], []
@@ -85,11 +85,11 @@ def train_epoch(model, gemma, optimizer, loss_fn, train_loader, device, word_emb
 
         optimizer.zero_grad()
 
-        emb = model.forward(inputs)
-        word_embs_extended = word_embs.repeat(len(inputs),1,1).detach()
+        emb = model.forward(inputs).to(torch.float16)
+        #word_embs_extended = word_embs.repeat(len(inputs),1,1).detach()
 
-        concatted = torch.cat((word_embs_extended, emb), dim=1).to(torch.float16)
-        logits = custom_output(concatted, gemma).float()
+        #concatted = torch.cat((word_embs_extended, emb), dim=1).to(torch.float16)
+        logits = custom_output(emb, gemma).float()
         
         loss = loss_fn(logits, labels.long())
         loss.backward()
@@ -103,7 +103,7 @@ def train_epoch(model, gemma, optimizer, loss_fn, train_loader, device, word_emb
     return model, train_loss_batches, train_acc_batches
 
 
-def validate(model, gemma, loss_fn, val_loader, device, word_embs):
+def validate(model, gemma, loss_fn, val_loader, device):
     val_loss_cum = 0
     val_acc_cum = 0
     model.eval()
@@ -111,11 +111,11 @@ def validate(model, gemma, loss_fn, val_loader, device, word_embs):
         for batch_index, (x, y) in enumerate(val_loader, 1):
             inputs, labels = x.to(device), y.to(device)
 
-            emb = model.forward(inputs)
-            word_embs_extended = word_embs.repeat(len(inputs),1,1).detach()
+            emb = model.forward(inputs).to(torch.float16)
+            #word_embs_extended = word_embs.repeat(len(inputs),1,1).detach()
 
-            concatted = torch.cat((word_embs_extended, emb), dim=1).to(torch.float16)
-            logits = custom_output(concatted, gemma)
+            #concatted = torch.cat((word_embs_extended, emb), dim=1).to(torch.float16)
+            logits = custom_output(emb, gemma)
 
             batch_loss = loss_fn(logits, labels.long())
             val_loss_cum += batch_loss.item()
@@ -125,7 +125,7 @@ def validate(model, gemma, loss_fn, val_loader, device, word_embs):
     return val_loss_cum/len(val_loader), val_acc_cum/len(val_loader)
 
 
-def training_loop(model, gemma, optimizer, loss_fn, train_loader, val_loader, num_epochs, word_embs):
+def training_loop(model, gemma, optimizer, loss_fn, train_loader, val_loader, num_epochs):
     print("Starting training")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
@@ -137,9 +137,8 @@ def training_loop(model, gemma, optimizer, loss_fn, train_loader, val_loader, nu
                                                    optimizer,
                                                    loss_fn,
                                                    train_loader,
-                                                   device,
-                                                   word_embs)
-        val_loss, val_acc = validate(model, gemma, loss_fn, val_loader, device, word_embs)
+                                                   device)
+        val_loss, val_acc = validate(model, gemma, loss_fn, val_loader, device)
         print(f"Epoch {epoch}/{num_epochs}: "
               f"Train loss: {sum(train_loss)/len(train_loss):.3f}, "
               f"Train acc.: {sum(train_acc)/len(train_acc):.3f}, "

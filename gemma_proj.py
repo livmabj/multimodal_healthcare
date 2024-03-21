@@ -51,9 +51,9 @@ df = pd.concat([haim_col, vd_cols, y_col], axis=1)
 pkl_list = df['haim_id'].unique().tolist()
 
 # Initial prompt
-input_text = "Based on the following image, output yes if the patient is likely to die and no otherwise."
-input_ids = tokenizer(input_text, return_tensors="pt").to("cuda")
-word_embs = gemma.get_input_embeddings().weight[input_ids.input_ids].to("cuda")
+#input_text = "Based on the following image, output yes if the patient is likely to die and no otherwise."
+#input_ids = tokenizer(input_text, return_tensors="pt").to("cuda")
+#word_embs = gemma.get_input_embeddings().weight[input_ids.input_ids].to("cuda")
 
 
 # Load train/val sets and create data loaders
@@ -71,6 +71,8 @@ val_loader = DataLoader(val_set, batch_size=batch_size, num_workers=5)
 # Since the classes are very imbalanced, we weigh the classes to increase performance
 w0 = len(y_train)/(2*sum(y_train == 0))
 w1 = len(y_train)/(2*sum(y_train == 1))
+#w0 = sum(y_train == 0)/len(y_train)
+#w1 = 1 - w0
 weights = torch.tensor([w0, w1], dtype = torch.float).to("cuda")
 
 
@@ -80,10 +82,10 @@ optimizer = optim.Adam(model.parameters(), lr=0.001)
 loss_fn = nn.CrossEntropyLoss(weight=weights)
 #loss_fn = FocalLoss(gamma=3)
 
-num_epochs = 10
+num_epochs = 5
 
 # Run training
-fine_tuned, train_losses, train_accs, val_losses, val_accs = training_loop(model, gemma, optimizer, loss_fn, train_loader, val_loader, num_epochs, word_embs)
+fine_tuned, train_losses, train_accs, val_losses, val_accs = training_loop(model, gemma, optimizer, loss_fn, train_loader, val_loader, num_epochs)
 
 
 # Save model and results
