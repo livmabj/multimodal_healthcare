@@ -1,3 +1,4 @@
 *.pkl
 *.pth
 __pycache__/
+results*
