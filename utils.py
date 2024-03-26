@@ -16,16 +16,33 @@ class ProjectionNN(nn.Module):
     def __init__(self):
         super(ProjectionNN, self).__init__()
 
-        # Architecture
+        # Architecture enhancements
         self.fc1 = nn.Linear(EMBEDDING_SIZE, 128)
-        self.relu = nn.ReLU()
-        self.fc2 = nn.Linear(128, 2048 * PROJECTION_SIZE)
+        self.bn1 = nn.BatchNorm1d(128)
+        self.relu1 = nn.ReLU()
+
+        self.fc2 = nn.Linear(128, 256)
+        self.bn2 = nn.BatchNorm1d(256)
+        self.relu2 = nn.ReLU()
+        self.dropout1 = nn.Dropout(p=0.3)
+
+        self.fc3 = nn.Linear(256, 2048 * PROJECTION_SIZE)
+        self.bn3 = nn.BatchNorm1d(2048 * PROJECTION_SIZE) 
+
 
     def forward(self, x):
         x = self.fc1(x)
-        x = self.relu(x)
+        x = self.bn1(x)
+        x = self.relu1(x)
+
         x = self.fc2(x)
-        x = x.view(-1,PROJECTION_SIZE,2048)
+        x = self.bn2(x)
+        x = self.relu2(x)
+        x = self.dropout1(x)
+
+        x = self.fc3(x)
+        x = self.bn3(x)
+        x = x.view(-1, PROJECTION_SIZE, 2048)
         return x
 
 
@@ -75,7 +92,7 @@ class DataSplit():
 
         self.df['y'] = y
 
-    def get_data(self, partition, test_size=0.3, validation_size=0.1, random_state=None):
+    def get_data(self, partition, test_size=0.3, validation_size=0.1, random_state=42):
 
         self.partition = partition
 
@@ -128,7 +145,8 @@ def custom_output(emb, gemma):
     noyes = [956, 3276]
     logits = outputs['logits']
     logits = logits[:,-1:,noyes].mean(dim=1)
-    return logits
+    probs = torch.softmax(logits, dim=-1)
+    return probs
 
 
 def output_to_label(logits):
@@ -211,23 +229,8 @@ def training_loop(model, gemma, optimizer, loss_fn, train_loader, val_loader, nu
         val_accs.append(val_acc)
     return model, train_losses, train_accs, val_losses, val_accs
 
-
-def save_test_set(df,pkl_list):
-    train_id, test_id = train_test_split(pkl_list, test_size=0.05)
-    
-    train_idx = df[df['haim_id'].isin(train_id)]['haim_id'].tolist()
-    test_idx = df[df['haim_id'].isin(test_id)]['haim_id'].tolist()
-
-    df_train = df[df['haim_id'].isin(train_idx)]
-
-    x_test = df[df['haim_id'].isin(test_idx)].drop(['haim_id','y'],axis=1).values
-
-    y_test = df[df['haim_id'].isin(test_idx)]['y'].values
-
-    with open('/mnt/mimic/data/HAIM/mimic_extras/x_test.pkl', 'wb') as f1:
-        pickle.dump(x_test, f1)
-
-    with open('/mnt/mimic/data/HAIM/mimic_extras/y_test.pkl', 'wb') as f2:
-        pickle.dump(y_test, f2)
-
-    return df_train
+def select_random_subset(data, subset_fraction=0.1):
+    num_samples = int(len(data) * subset_fraction)
+    indices = np.random.choice(len(data), num_samples, replace=False)
+    subset = data[indices]
+    return subset

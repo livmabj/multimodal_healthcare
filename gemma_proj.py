@@ -80,8 +80,8 @@ weights = torch.tensor([w0, w1], dtype = torch.float).to("cuda")
 # Setting model and hyperparameters
 model = ProjectionNN()
 optimizer = optim.Adam(model.parameters(), lr=0.001)
-loss_fn = nn.CrossEntropyLoss(weight=weights)
-#loss_fn = FocalLoss(gamma=3)
+#loss_fn = nn.CrossEntropyLoss(weight=weights)
+loss_fn = FocalLoss(gamma=12)
 
 num_epochs = 5
 
@@ -90,18 +90,19 @@ fine_tuned, train_losses, train_accs, val_losses, val_accs = training_loop(model
 
 
 # Save model and results
-torch.save(fine_tuned, 'finetuned_bce_001.pth')
+folder = 'results_focal_12_001'
+torch.save(fine_tuned, f"{folder}/finetuned.pth")
 
-with open('train_losses_bce_001.pkl', 'wb') as f1:
+with open(f"{folder}/train_losses.pkl", 'wb') as f1:
     pickle.dump(train_losses, f1)
 
-with open('train_accs_bce_001.pkl', 'wb') as f2:
+with open(f"{folder}/train_accs.pkl", 'wb') as f2:
     pickle.dump(train_accs, f2)
 
-with open('val_losses_bce_001.pkl', 'wb') as f3:
+with open(f"{folder}/val_losses.pkl", 'wb') as f3:
     pickle.dump(val_losses, f3)
 
-with open('val_accs_bce_001.pkl', 'wb') as f4:
+with open(f"{folder}/val_accs.pkl", 'wb') as f4:
     pickle.dump(val_accs, f4)
 
     
