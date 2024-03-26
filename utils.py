@@ -45,37 +45,41 @@ class CustomDataset(Dataset):
 
 class DataSplit():
 
-    '''Class to get the correct data-partition and split up in train, validation and test.
-    Initialized with full df, and then datasplit is created through calling get_data(partition='los' or 'mortality')
-    Size of validation and test can also be customized.
-    '''
-
     def __init__(self, df):
         self.df = df
-        self.types = ['vd_', 'vp_', 'vmd_', 'ts_ce_', 'ts_le_', 'ts_pe_', 'n_rad_']
+        self.types = ['vd_', 'vp_', 'vmd_', 'vmp', 'ts_ce_', 'ts_le_', 'ts_pe_', 'n_rad_']
         self.partition = None
 
     def partitiondata(self, partition):
         self.pkl_list = []
         if partition == 'mortality':
-            condition_death_small48 = (self.df['img_length_of_stay'] < 48) & (self.df['death_status'] == 1)
 
-            y = [0]*len(self.df)
-            for i, condition in enumerate(condition_death_small48):
-                if condition:
-                    y[i] = 1
+            df_death_small48 = self.df[((self.df['img_length_of_stay'] < 48) & (self.df['death_status'] == 1))]
+            df_alive_big48 = self.df[((self.df['img_length_of_stay'] >= 48) & (self.df['death_status'] == 0))]
+            df_death_big48 = self.df[((self.df['img_length_of_stay'] >= 48) & (self.df['death_status'] == 1))]
+
+            df_death_small48['y'] = 1
+            df_alive_big48['y'] = 0
+            df_death_big48['y'] = 0
+            self.df = pd.concat([df_death_small48, df_alive_big48, df_death_big48], axis = 0)
+            self.df = self.df.drop(['img_id', 'img_charttime', 'img_deltacharttime', 'discharge_location', 'img_length_of_stay', 
+                    'death_status'], axis = 1)
 
         if partition == 'los':
-            condition_alive_small48 = self.df[((self.df['img_length_of_stay'] < 48) & (self.df['death_status'] == 0))]
 
-            y = [0]*len(self.df)
-            for i, condition in enumerate(condition_alive_small48):
-                if condition:
-                    y[i] = 1
+            df_alive_small48 = self.df[((self.df['img_length_of_stay'] < 48) & (self.df['death_status'] == 0))]
+            df_alive_big48 = self.df[((self.df['img_length_of_stay'] >= 48) & (self.df['death_status'] == 0))]
+            df_death = self.df[(self.df['death_status'] == 1)]
 
-        self.df['y'] = y
+            df_alive_small48['y'] = 1
+            df_alive_big48['y'] = 0
+            df_death['y'] = 0
+            self.df = pd.concat([df_alive_small48, df_alive_big48, df_death], axis = 0)
 
-    def get_data(self, partition, test_size=0.3, validation_size=0.1, random_state=None):
+            self.df = self.df.drop(['img_id', 'img_charttime', 'img_deltacharttime', 'discharge_location', 'img_length_of_stay', 
+                    'death_status'], axis = 1)
+
+    def split_data(self, partition, test_size=0.3, validation_size=0.1, random_state=1):
 
         self.partition = partition
 
@@ -83,25 +87,32 @@ class DataSplit():
         pkl_list = self.df['haim_id'].unique().tolist()
 
         # Split into training and test sets
-        train_set, test_set = train_test_split(pkl_list, test_size=test_size, random_state=random_state)
+        train_id, test_id = train_test_split(pkl_list, test_size=test_size, random_state=random_state)
 
         remaining_data_size = 1.0 - test_size
         validation_size = validation_size*remaining_data_size
 
         # Further split the training set into training and validation sets
-        train_set, validation_set = train_test_split(train_set, test_size=validation_size, random_state=random_state)
+        train_id, validation_id = train_test_split(train_id, test_size=validation_size, random_state=random_state)
 
-        train_idx = self.df[self.df['haim_id'].isin(train_set)]['haim_id'].tolist()
-        validation_idx = self.df[self.df['haim_id'].isin(validation_set)]['haim_id'].tolist()
-        test_idx = self.df[self.df['haim_id'].isin(test_set)]['haim_id'].tolist()
+        train_idx = self.df[self.df['haim_id'].isin(train_id)]['haim_id'].tolist()
+        validation_idx = self.df[self.df['haim_id'].isin(validation_id)]['haim_id'].tolist()
+        test_idx = self.df[self.df['haim_id'].isin(test_id)]['haim_id'].tolist()
 
-        self.x_train = {t: self.df[self.df['haim_id'].isin(train_idx)].filter(regex='^'+t).values for t in self.types}
-        self.x_validation = {t: self.df[self.df['haim_id'].isin(validation_idx)].filter(regex='^'+t).values for t in self.types}
-        self.x_test = {t: self.df[self.df['haim_id'].isin(test_idx)].filter(regex='^'+t).values for t in self.types}
+        self.x_train = self.df[self.df['haim_id'].isin(train_idx)].drop(['y','haim_id'],axis=1)
+        self.x_validation = self.df[self.df['haim_id'].isin(validation_idx)].drop(['y','haim_id'],axis=1)
+        self.x_test = self.df[self.df['haim_id'].isin(test_idx)].drop(['y','haim_id'],axis=1)
 
-        self.y_train = self.df[self.df['haim_id'].isin(train_idx)]['y'].values
-        self.y_validation = self.df[self.df['haim_id'].isin(validation_idx)]['y'].values
-        self.y_test = self.df[self.df['haim_id'].isin(test_idx)]['y'].values
+        self.y_train = self.df[self.df['haim_id'].isin(train_idx)]['y']
+        self.y_validation = self.df[self.df['haim_id'].isin(validation_idx)]['y']
+        self.y_test = self.df[self.df['haim_id'].isin(test_idx)]['y']
+
+    def get_type(self, requested):
+        train_cols = self.x_train.filter(regex='^'+requested)
+        val_cols = self.x_validation.filter(regex='^'+requested)
+        test_cols = self.x_test.filter(regex='^'+requested)
+        return train_cols, val_cols, test_cols
+        
 
 
 def data_split(df, pkl_list):
