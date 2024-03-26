@@ -62,10 +62,11 @@ batch_size = 8
 ###x_train, x_val, _, y_train, y_val, _ = data_split(df, pkl_list)
 # x_train_small, x_val_small, y_train_small, y_val_small = data_split(df.iloc[:500], pkl_list)
 Data = DataSplit(df)
-Data.get_data('mortality')
+Data.split_data('mortality')
 
-train_set = CustomDataset(Data.x_train['vd_'], Data.y_train)
-val_set = CustomDataset(Data.x_validation['vd_'], Data.y_validation)
+X,V,T = Data.get_type('vd_')
+train_set = CustomDataset(X.values.tolist(), Data.y_train.tolist())
+val_set = CustomDataset(V.values.tolist(), Data.y_validation.tolist())
 
 train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=5)
 val_loader = DataLoader(val_set, batch_size=batch_size, num_workers=5)
