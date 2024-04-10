@@ -9,6 +9,7 @@ from torch.utils.data import Dataset, DataLoader
 import pandas as pd
 from tqdm import tqdm
 import pickle
+import numpy as np
 
 from dataclasses import dataclass, field
 from typing import Optional
@@ -21,12 +22,48 @@ from peft import LoraConfig, TaskType, get_peft_model, get_peft_config
 tokenizer = AutoTokenizer.from_pretrained("google/gemma-2b-it")
 tokenizer.pad_token_id = tokenizer.eos_token_id
 
-embedding_size = 1024
-projection_size = 6
+#embedding_size = 1024
+#projection_size = 6
+
+EMBEDDING_SIZE = 1024
+PROJECTION_SIZE = 6
 
 class ProjectionNN(nn.Module):
     def __init__(self):
         super(ProjectionNN, self).__init__()
+
+        # Architecture enhancements
+        self.fc1 = nn.Linear(EMBEDDING_SIZE, 128)
+        self.bn1 = nn.BatchNorm1d(128)
+        self.relu1 = nn.ReLU()
+
+        self.fc2 = nn.Linear(128, 256)
+        self.bn2 = nn.BatchNorm1d(256)
+        self.relu2 = nn.ReLU()
+        self.dropout1 = nn.Dropout(p=0.3)
+
+        self.fc3 = nn.Linear(256, 2048 * PROJECTION_SIZE)
+        self.bn3 = nn.BatchNorm1d(2048 * PROJECTION_SIZE) 
+
+
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.bn1(x)
+        x = self.relu1(x)
+
+        x = self.fc2(x)
+        x = self.bn2(x)
+        x = self.relu2(x)
+        x = self.dropout1(x)
+
+        x = self.fc3(x)
+        x = self.bn3(x)
+        x = x.view(-1, PROJECTION_SIZE, 2048)
+        return x
+
+class ProjectionNNG(nn.Module):
+    def __init__(self):
+        super(ProjectionNNG, self).__init__()
 
         # Architecture
         self.fc1 = nn.Linear(embedding_size, 128).cuda()
@@ -44,30 +81,39 @@ class DataSplit():
 
     def __init__(self, df):
         self.df = df
-        self.types = ['vd_', 'vp_', 'vmd_', 'vmp_' 'ts_ce_', 'ts_le_', 'ts_pe_', 'n_rad_']
+        self.types = ['vd_', 'vp_', 'vmd_', 'vmp', 'ts_ce_', 'ts_le_', 'ts_pe_', 'n_rad_']
         self.partition = None
 
     def partitiondata(self, partition):
         self.pkl_list = []
         if partition == 'mortality':
-            condition_death_small48 = (self.df['img_length_of_stay'] < 48) & (self.df['death_status'] == 1)
 
-            y = [0]*len(self.df)
-            for i, condition in enumerate(condition_death_small48):
-                if condition:
-                    y[i] = 1
+            df_death_small48 = self.df[((self.df['img_length_of_stay'] < 48) & (self.df['death_status'] == 1))]
+            df_alive_big48 = self.df[((self.df['img_length_of_stay'] >= 48) & (self.df['death_status'] == 0))]
+            df_death_big48 = self.df[((self.df['img_length_of_stay'] >= 48) & (self.df['death_status'] == 1))]
+
+            df_death_small48['y'] = 1
+            df_alive_big48['y'] = 0
+            df_death_big48['y'] = 0
+            self.df = pd.concat([df_death_small48, df_alive_big48, df_death_big48], axis = 0)
+            self.df = self.df.drop(['img_id', 'img_charttime', 'img_deltacharttime', 'discharge_location', 'img_length_of_stay', 
+                    'death_status'], axis = 1)
 
         if partition == 'los':
-            condition_alive_small48 = self.df[((self.df['img_length_of_stay'] < 48) & (self.df['death_status'] == 0))]
 
-            y = [0]*len(self.df)
-            for i, condition in enumerate(condition_alive_small48):
-                if condition:
-                    y[i] = 1
+            df_alive_small48 = self.df[((self.df['img_length_of_stay'] < 48) & (self.df['death_status'] == 0))]
+            df_alive_big48 = self.df[((self.df['img_length_of_stay'] >= 48) & (self.df['death_status'] == 0))]
+            df_death = self.df[(self.df['death_status'] == 1)]
 
-        self.df['y'] = y
+            df_alive_small48['y'] = 1
+            df_alive_big48['y'] = 0
+            df_death['y'] = 0
+            self.df = pd.concat([df_alive_small48, df_alive_big48, df_death], axis = 0)
 
-    def get_data(self, partition, test_size=0.3, validation_size=0.1, random_state=None):
+            self.df = self.df.drop(['img_id', 'img_charttime', 'img_deltacharttime', 'discharge_location', 'img_length_of_stay', 
+                    'death_status'], axis = 1)
+
+    def split_data(self, partition, test_size=0.3, validation_size=0.1, random_state=1):
 
         self.partition = partition
 
@@ -75,29 +121,52 @@ class DataSplit():
         pkl_list = self.df['haim_id'].unique().tolist()
 
         # Split into training and test sets
-        train_set, test_set = train_test_split(pkl_list, test_size=test_size, random_state=random_state)
+        train_id, test_id = train_test_split(pkl_list, test_size=test_size, random_state=random_state)
 
         remaining_data_size = 1.0 - test_size
         validation_size = validation_size*remaining_data_size
 
         # Further split the training set into training and validation sets
-        train_set, validation_set = train_test_split(train_set, test_size=validation_size, random_state=random_state)
+        train_id, validation_id = train_test_split(train_id, test_size=validation_size, random_state=random_state)
 
-        train_idx = self.df[self.df['haim_id'].isin(train_set)]['haim_id'].tolist()
-        validation_idx = self.df[self.df['haim_id'].isin(validation_set)]['haim_id'].tolist()
-        test_idx = self.df[self.df['haim_id'].isin(test_set)]['haim_id'].tolist()
+        train_idx = self.df[self.df['haim_id'].isin(train_id)]['haim_id'].tolist()
+        validation_idx = self.df[self.df['haim_id'].isin(validation_id)]['haim_id'].tolist()
+        test_idx = self.df[self.df['haim_id'].isin(test_id)]['haim_id'].tolist()
 
-        self.x_train = {t: self.df[self.df['haim_id'].isin(train_idx)].filter(regex='^'+t).values for t in self.types}
-        self.x_validation = {t: self.df[self.df['haim_id'].isin(validation_idx)].filter(regex='^'+t).values for t in self.types}
-        self.x_test = {t: self.df[self.df['haim_id'].isin(test_idx)].filter(regex='^'+t).values for t in self.types}
+        self.x_train = self.df[self.df['haim_id'].isin(train_idx)].drop(['y','haim_id'],axis=1)
+        self.x_validation = self.df[self.df['haim_id'].isin(validation_idx)].drop(['y','haim_id'],axis=1)
+        self.x_test = self.df[self.df['haim_id'].isin(test_idx)].drop(['y','haim_id'],axis=1)
 
-        self.y_train = [' No' if value == 0 else ' Yes' for value in self.df[self.df['haim_id'].isin(train_idx)]['y'].values]
-        self.y_validation = [' No' if value == 0 else ' Yes' for value in self.df[self.df['haim_id'].isin(validation_idx)]['y'].values]
-        self.y_test = [' No' if value == 0 else ' Yes' for value in self.df[self.df['haim_id'].isin(test_idx)]['y'].values]
+        self.y_train = self.df[self.df['haim_id'].isin(train_idx)]['y']
+        self.y_validation = self.df[self.df['haim_id'].isin(validation_idx)]['y']
+        self.y_test = self.df[self.df['haim_id'].isin(test_idx)]['y']
+        #self.y_train = [' No' if value == 0 else ' Yes' for value in self.df[self.df['haim_id'].isin(train_idx)]['y'].values]
+        #self.y_validation = [' No' if value == 0 else ' Yes' for value in self.df[self.df['haim_id'].isin(validation_idx)]['y'].values]
+        #self.y_test = [' No' if value == 0 else ' Yes' for value in self.df[self.df['haim_id'].isin(test_idx)]['y'].values]
+
+    def get_type(self, requested):
+        train_cols = self.x_train.filter(regex='^'+requested)
+        val_cols = self.x_validation.filter(regex='^'+requested)
+        test_cols = self.x_test.filter(regex='^'+requested)
+        return train_cols, val_cols, test_cols
+
+
+class CustomDataset(Dataset):
+    def __init__(self, vectors, labels):
+        self.vectors = vectors
+        self.labels = labels
+    
+    def __len__(self):
+        return len(self.vectors)
+    
+    def __getitem__(self, index):
+        vector = torch.tensor(self.vectors[index]).float()
+        label = torch.from_numpy(np.array([self.labels[index]]))
+        return vector, label.squeeze()
 
 # dataset for generative
 
-class CustomDataset(Dataset):
+class CustomDatasetG(Dataset):
     def __init__(self, embedding, labels):
         self.labels = labels
         self.embedding = embedding
