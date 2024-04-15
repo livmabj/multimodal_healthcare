@@ -261,3 +261,89 @@ def training_loop(model, optimizer, loss_fn, train_loader, val_loader, num_epoch
             pickle.dump(val_losses, f3)
 
     return model, train_losses, val_losses
+
+
+def train_epoch_clf(proj_model, clf_head, clf_optimizer, loss_fn, train_loader, device):
+    # Train:
+    #proj_model.train()
+    clf_head.train()
+    train_loss_batches, train_acc_batches = [], []
+    for batch_index, (x, y) in enumerate(train_loader, 1):
+        inputs, labels = x.to(device), y.to(device)
+        #optimizer.zero_grad()
+        clf_optimizer.zero_grad()
+
+        #emb = proj_model.forward(inputs)
+        enc = proj_model.encoder(inputs)
+        emb = clf_head(enc)
+        #word_embs_extended = word_embs.repeat(len(inputs),1,1).detach()
+
+        #concatted = torch.cat((word_embs_extended, emb), dim=1).to(torch.float16)
+        #logits = custom_output(emb, gemma).float()
+        
+        loss = loss_fn(emb, labels.long())
+        loss.backward()
+        #optimizer.step()
+        clf_optimizer.step()
+        train_loss_batches.append(loss.item())
+
+        hard_preds = output_to_label(emb)
+        hard_preds = torch.argmax(hard_preds, dim=1)
+        acc_batch_avg = (hard_preds == labels).float().mean().item()
+        train_acc_batches.append(acc_batch_avg)
+
+    return clf_head, train_loss_batches, train_acc_batches
+
+
+def validate_clf(proj_model, clf_head, loss_fn, val_loader, device):
+    val_loss_cum = 0
+    val_acc_cum = 0
+    #proj_model.eval()
+    clf_head.eval()
+    with torch.no_grad():
+        for batch_index, (x, y) in enumerate(val_loader, 1):
+            inputs, labels = x.to(device), y.to(device)
+
+            #emb = proj_model.forward(inputs)
+            enc = proj_model.encoder(inputs)
+            emb = clf_head(enc)
+            #word_embs_extended = word_embs.repeat(len(inputs),1,1).detach()
+
+            #concatted = torch.cat((word_embs_extended, emb), dim=1).to(torch.float16)
+            #logits = custom_output(emb, gemma)
+
+            batch_loss = loss_fn(emb, labels.long())
+            val_loss_cum += batch_loss.item()
+            hard_preds = output_to_label(emb)
+            hard_preds = torch.argmax(hard_preds, dim=1)
+            acc_batch_avg = (hard_preds == labels).float().mean().item()
+            val_acc_cum += acc_batch_avg
+    return val_loss_cum/len(val_loader), val_acc_cum/len(val_loader)
+
+def training_loop_clf(proj_model, clf_head, clf_optimizer, loss_fn, train_loader, val_loader, num_epochs, scheduler):
+    print("Starting training")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    proj_model.to(device)
+    clf_head.to(device)
+    train_losses, train_accs, val_losses, val_accs = [], [], [], []
+    best_val_loss = float('inf')
+
+    for epoch in range(1, num_epochs+1):
+        clf_head, train_loss, train_acc = train_epoch_clf(proj_model, clf_head,
+                                                clf_optimizer,
+                                                   loss_fn,
+                                                   train_loader,
+                                                   device)
+        val_loss, val_acc = validate_clf(proj_model, clf_head, loss_fn, val_loader, device)
+        scheduler.step(val_loss)
+        print(f"Epoch {epoch}/{num_epochs}: "
+              f"Train loss: {sum(train_loss)/len(train_loss):.3f}, "
+              f"Train acc.: {sum(train_acc)/len(train_acc):.3f}, "
+              f"Val. loss: {val_loss:.3f}, "
+              f"Val. acc.: {val_acc:.3f}")
+        train_losses.append(sum(train_loss)/len(train_loss))
+        train_accs.append(sum(train_acc)/len(train_acc))
+        val_losses.append(val_loss)
+        val_accs.append(val_acc)
+
+    return clf_head, train_losses, train_accs, val_losses, val_accs
