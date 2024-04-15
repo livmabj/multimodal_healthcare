@@ -11,9 +11,11 @@ from sklearn.model_selection import train_test_split
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 from utils import *
+from projectors import *
 
 # Filepath to embeddings
-fname = "/mnt/mimic/data/HAIM/mimic_extras/embeddings.csv"
+#fname = "/mnt/mimic/data/HAIM/mimic_extras/embeddings.csv"
+fname = 'embeddings.csv'
 
 # YES-TOKEN: 3276
 # NO-TOKEN: 956
@@ -57,7 +59,7 @@ df = pd.read_csv(fname)
 
 
 # Load train/val sets and create data loaders
-batch_size = 8
+batch_size = 16
 
 ###x_train, x_val, _, y_train, y_val, _ = data_split(df, pkl_list)
 # x_train_small, x_val_small, y_train_small, y_val_small = data_split(df.iloc[:500], pkl_list)
@@ -80,18 +82,18 @@ weights = torch.tensor([w0, w1], dtype = torch.float).to("cuda")
 
 # Setting model and hyperparameters
 model = ProjectionNN()
-optimizer = optim.Adam(model.parameters(), lr=0.001)
+optimizer = optim.Adam(model.parameters(), lr=0.0002)
 #loss_fn = nn.CrossEntropyLoss(weight=weights)
-loss_fn = FocalLoss(gamma=12)
+loss_fn = FocalLoss(gamma=3)
 
-num_epochs = 5
+num_epochs = 30
 
 # Run training
 fine_tuned, train_losses, train_accs, val_losses, val_accs = training_loop(model, gemma, optimizer, loss_fn, train_loader, val_loader, num_epochs)
 
 
 # Save model and results
-folder = 'results_focal_12_001'
+folder = 'results/results_focal_3_0002'
 torch.save(fine_tuned, f"{folder}/finetuned.pth")
 
 with open(f"{folder}/train_losses.pkl", 'wb') as f1:

@@ -37,7 +37,7 @@ batch_size = 32
 Data = DataSplit(df)
 Data.split_data('mortality')
 
-X,V,T = Data.get_type('vd_')
+X,V,T = Data.get_type('vp_')
 
 # Since the classes are very imbalanced, we weigh the classes to increase performance
 w0 = len(Data.y_train)/(2*sum(Data.y_train == 0))
@@ -56,7 +56,7 @@ sampler = WeightedRandomSampler(samples_weight, len(samples_weight))
 train_set = CustomDataset(X.values.tolist(), Data.y_train.tolist())
 val_set = CustomDataset(V.values.tolist(), Data.y_validation.tolist())
 
-train_loader = DataLoader(train_set, batch_size=batch_size, sampler=sampler, num_workers=5)
+train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=5)
 val_loader = DataLoader(val_set, batch_size=batch_size, num_workers=5)
 
 
@@ -66,9 +66,9 @@ model = ProjectionNN()
 optimizer = optim.Adam(model.parameters(), lr=0.0003, weight_decay=3e-5)
 scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer=optimizer, patience=7)
 loss_fn = nn.CrossEntropyLoss(weight=weights)
-#loss_fn = FocalLoss(gamma=1)
+#loss_fn = FocalLoss(gamma=2)
 
-num_epochs = 50
+num_epochs = 100
 
 # Run training
 fine_tuned, train_losses, train_accs, val_losses, val_accs = training_loop(model, optimizer, loss_fn, train_loader, val_loader, num_epochs, scheduler)

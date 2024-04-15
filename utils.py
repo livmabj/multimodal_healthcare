@@ -8,42 +8,6 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 import pickle
 
-EMBEDDING_SIZE = 1024
-PROJECTION_SIZE = 1
-
-
-class ProjectionNN(nn.Module):
-    def __init__(self):
-        super(ProjectionNN, self).__init__()
-
-        # Architecture enhancements
-        self.fc1 = nn.Linear(EMBEDDING_SIZE, 128)
-        self.bn1 = nn.BatchNorm1d(128)
-        self.relu1 = nn.ReLU()
-
-        self.fc2 = nn.Linear(128, 256)
-        self.bn2 = nn.BatchNorm1d(256)
-        self.relu2 = nn.ReLU()
-        self.dropout1 = nn.Dropout(p=0.3)
-
-        self.fc3 = nn.Linear(256, 2048 * PROJECTION_SIZE)
-        self.bn3 = nn.BatchNorm1d(2048 * PROJECTION_SIZE) 
-
-
-    def forward(self, x):
-        x = self.fc1(x)
-        x = self.bn1(x)
-        x = self.relu1(x)
-
-        x = self.fc2(x)
-        x = self.bn2(x)
-        x = self.relu2(x)
-        x = self.dropout1(x)
-
-        x = self.fc3(x)
-        x = self.bn3(x)
-        x = x.view(-1, PROJECTION_SIZE, 2048)
-        return x
 
 
 class CustomDataset(Dataset):
@@ -64,7 +28,7 @@ class DataSplit():
 
     def __init__(self, df):
         self.df = df
-        self.types = ['vd_', 'vp_', 'vmd_', 'vmp', 'ts_ce_', 'ts_le_', 'ts_pe_', 'n_rad_']
+        self.types = ['demo_', 'vd_', 'vp_', 'vmd_', 'vmp', 'ts_ce_', 'ts_le_', 'ts_pe_', 'n_rad_']
         self.partition = None
 
     def partitiondata(self, partition):
@@ -96,7 +60,7 @@ class DataSplit():
             self.df = self.df.drop(['img_id', 'img_charttime', 'img_deltacharttime', 'discharge_location', 'img_length_of_stay', 
                     'death_status'], axis = 1)
 
-    def split_data(self, partition, test_size=0.3, validation_size=0.1, random_state=1):
+    def split_data(self, partition, test_size=0.1, validation_size=0.25, random_state=42):
 
         self.partition = partition
 
@@ -104,16 +68,16 @@ class DataSplit():
         pkl_list = self.df['haim_id'].unique().tolist()
 
         # Split into training and test sets
-        train_id, test_id = train_test_split(pkl_list, test_size=test_size, random_state=random_state)
+        train_id, val_id = train_test_split(pkl_list, test_size=validation_size, random_state=random_state)
 
-        remaining_data_size = 1.0 - test_size
-        validation_size = validation_size*remaining_data_size
+        remaining_data_size = 1.0 - validation_size
+        test_size = test_size*remaining_data_size
 
         # Further split the training set into training and validation sets
-        train_id, validation_id = train_test_split(train_id, test_size=validation_size, random_state=random_state)
+        train_id, test_id = train_test_split(train_id, test_size=test_size, random_state=random_state)
 
         train_idx = self.df[self.df['haim_id'].isin(train_id)]['haim_id'].tolist()
-        validation_idx = self.df[self.df['haim_id'].isin(validation_id)]['haim_id'].tolist()
+        validation_idx = self.df[self.df['haim_id'].isin(val_id)]['haim_id'].tolist()
         test_idx = self.df[self.df['haim_id'].isin(test_id)]['haim_id'].tolist()
 
         self.x_train = self.df[self.df['haim_id'].isin(train_idx)].drop(['y','haim_id'],axis=1)
@@ -155,15 +119,21 @@ def custom_output(emb, gemma):
     outputs = gemma(inputs_embeds=emb)
     noyes = [956, 3276]
     logits = outputs['logits']
-    logits = logits[:,-1:,noyes].mean(dim=1)
+    logits = logits[:,-6:,noyes].mean(dim=1)
     probs = torch.softmax(logits, dim=-1)
     return probs
 
-
+"""
 def output_to_label(logits):
     probs = torch.softmax(logits, dim=-1)
     predicted_token_id = torch.argmax(probs, dim=-1)
     return predicted_token_id
+"""
+   
+def output_to_label(z):
+    c = torch.round(z)
+    return c.long()
+
 
     
 def train_epoch(model, gemma, optimizer, loss_fn, train_loader, device):
@@ -238,6 +208,20 @@ def training_loop(model, gemma, optimizer, loss_fn, train_loader, val_loader, nu
         train_accs.extend(train_acc)
         val_losses.append(val_loss)
         val_accs.append(val_acc)
+        folder = 'results/results_focal_3_0002'
+        torch.save(model, f"{folder}/finetuned.pth")
+
+        with open(f"{folder}/train_losses.pkl", 'wb') as f1:
+            pickle.dump(train_losses, f1)
+
+        with open(f"{folder}/train_accs.pkl", 'wb') as f2:
+            pickle.dump(train_accs, f2)
+
+        with open(f"{folder}/val_losses.pkl", 'wb') as f3:
+            pickle.dump(val_losses, f3)
+
+        with open(f"{folder}/val_accs.pkl", 'wb') as f4:
+            pickle.dump(val_accs, f4)
     return model, train_losses, train_accs, val_losses, val_accs
 
 def select_random_subset(data, subset_fraction=0.1):
