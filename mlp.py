@@ -72,5 +72,3 @@ num_epochs = 50
 
 # Run training
 fine_tuned, train_losses, train_accs, val_losses, val_accs = training_loop(model, optimizer, loss_fn, train_loader, val_loader, num_epochs, scheduler)
-
-    
