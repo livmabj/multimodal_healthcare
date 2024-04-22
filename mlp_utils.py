@@ -6,6 +6,7 @@ from focal_loss.focal_loss import FocalLoss
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
+from sklearn import metrics
 import pickle
 
 EMBEDDING_SIZE = 1024
@@ -16,34 +17,33 @@ class ProjectionNN(nn.Module):
     def __init__(self):
         super(ProjectionNN, self).__init__()
 
-        self.bn1 = nn.BatchNorm1d(18)
-        self.fc1 = nn.Linear(18,64)
+        self.bn1 = nn.BatchNorm1d(1024)
+        self.fc1 = nn.Linear(1024,1024)
         self.relu1 = nn.ReLU()
         self.drop1 = nn.Dropout(p=0.15)
 
-        self.fc2 = nn.Linear(64,64)
-        self.ln2 = nn.LayerNorm(64)
-        self.relu2 = nn.ReLU()
-        self.drop2 = nn.Dropout(p=0.15)
+        #self.fc2 = nn.Linear(1024,1024)
+        #self.ln2 = nn.LayerNorm(1024)
+        #self.relu2 = nn.ReLU()
+        #self.drop2 = nn.Dropout(p=0.15)
 
-        self.fc4 = nn.Linear(64,32)
-        self.ln4 = nn.LayerNorm(32)
+        self.fc4 = nn.Linear(1024,512)
+        self.ln4 = nn.LayerNorm(512)
         self.relu4 = nn.ReLU()
 
-        self.fc5 = nn.Linear(32,2)
+        self.fc5 = nn.Linear(512,2)
 
         self.flatten = nn.Flatten()
-        self.softmax = nn.Softmax(dim=1)
-
+    
     def forward(self,x):
         x = self.bn1(x)
         x = self.fc1(x)
         x = self.relu1(x)
 
-        x = self.fc2(x)
-        x = self.ln2(x)
-        x = self.relu2(x)
-        x = self.drop2(x)
+        #x = self.fc2(x)
+        #x = self.ln2(x)
+        #x = self.relu2(x)
+        #x = self.drop2(x)
 
         x = self.fc4(x)
         x = self.ln4(x)
@@ -51,7 +51,6 @@ class ProjectionNN(nn.Module):
 
         x = self.fc5(x)
         x = self.flatten(x)
-        x = self.softmax(x)
         return x
 
 class CustomDataset(Dataset):
@@ -90,7 +89,7 @@ class DataSplit():
             self.df = self.df.drop(['img_id', 'img_charttime', 'img_deltacharttime', 'discharge_location', 'img_length_of_stay', 
                     'death_status'], axis = 1)
 
-        if partition == 'los':
+        elif partition == 'los':
 
             df_alive_small48 = self.df[((self.df['img_length_of_stay'] < 48) & (self.df['death_status'] == 0))]
             df_alive_big48 = self.df[((self.df['img_length_of_stay'] >= 48) & (self.df['death_status'] == 0))]
@@ -103,6 +102,13 @@ class DataSplit():
 
             self.df = self.df.drop(['img_id', 'img_charttime', 'img_deltacharttime', 'discharge_location', 'img_length_of_stay', 
                     'death_status'], axis = 1)
+            
+        else:
+            self.df = self.df[self.df[partition].isin([0,1])]
+            self.df = self.df.drop(['img_id', 'img_charttime', 'img_deltacharttime', 'discharge_location', 'img_length_of_stay', 
+                    'death_status'], axis = 1)
+
+            self.df['y'] = self.df[partition]
 
     def split_data(self, partition, test_size=0.05, validation_size=0.2, random_state=42):
 
@@ -217,6 +223,9 @@ def train_epoch(model, optimizer, loss_fn, train_loader, device):
 def validate(model, loss_fn, val_loader, device):
     val_loss_cum = 0
     val_acc_cum = 0
+    preds = []
+    list_labels = []
+
     model.eval()
     with torch.no_grad():
         for batch_index, (x, y) in enumerate(val_loader, 1):
@@ -234,7 +243,11 @@ def validate(model, loss_fn, val_loader, device):
             hard_preds = torch.argmax(hard_preds, dim=1)
             acc_batch_avg = (hard_preds == labels).float().mean().item()
             val_acc_cum += acc_batch_avg
-    return val_loss_cum/len(val_loader), val_acc_cum/len(val_loader)
+
+            preds.extend(hard_preds)
+            list_labels.extend(labels)
+
+    return val_loss_cum/len(val_loader), val_acc_cum/len(val_loader), preds, list_labels
 
 
 def training_loop(model, optimizer, loss_fn, train_loader, val_loader, num_epochs, scheduler):
@@ -243,6 +256,7 @@ def training_loop(model, optimizer, loss_fn, train_loader, val_loader, num_epoch
     model.to(device)
     train_losses, train_accs, val_losses, val_accs = [], [], [], []
     best_val_loss = float('inf')
+    best_f1_score = 0
 
     for epoch in range(1, num_epochs+1):
         model, train_loss, train_acc = train_epoch(model,
@@ -250,21 +264,31 @@ def training_loop(model, optimizer, loss_fn, train_loader, val_loader, num_epoch
                                                    loss_fn,
                                                    train_loader,
                                                    device)
-        val_loss, val_acc = validate(model, loss_fn, val_loader, device)
+        val_loss, val_acc, preds, labels = validate(model, loss_fn, val_loader, device)
+        
+        preds_arrays = [t.cpu().numpy() for t in preds]
+        preds = np.array(preds_arrays)
+
+        labels_arrays = [t.cpu().numpy() for t in labels]
+        labels = np.array(labels_arrays)
+
+
+        f1_score = metrics.f1_score(labels, preds)
         scheduler.step(val_loss)
         print(f"Epoch {epoch}/{num_epochs}: "
               f"Train loss: {sum(train_loss)/len(train_loss):.3f}, "
               f"Train acc.: {sum(train_acc)/len(train_acc):.3f}, "
               f"Val. loss: {val_loss:.3f}, "
-              f"Val. acc.: {val_acc:.3f}")
+              f"Val. acc.: {val_acc:.3f}, "
+              f"F1-score: {f1_score:.3f}")
         train_losses.append(sum(train_loss)/len(train_loss))
         train_accs.append(sum(train_acc)/len(train_acc))
         val_losses.append(val_loss)
         val_accs.append(val_acc)
         folder = 'results/test'
 
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
+        if f1_score > best_f1_score:
+            best_f1_score = f1_score
             torch.save(model, f"{folder}/finetuned.pth")
 
         with open(f"{folder}/train_losses.pkl", 'wb') as f1:

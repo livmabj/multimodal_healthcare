@@ -8,6 +8,7 @@ import numpy as np
 import torch.nn.functional as F
 from sklearn.model_selection import train_test_split
 import pickle
+from sklearn import metrics
 
 EMBEDDING_SIZE = 1024
 PROJECTION_SIZE = 32
@@ -95,7 +96,7 @@ class DataSplit():
             self.df = self.df.drop(['img_id', 'img_charttime', 'img_deltacharttime', 'discharge_location', 'img_length_of_stay', 
                     'death_status'], axis = 1)
 
-        if partition == 'los':
+        elif partition == 'los':
 
             df_alive_small48 = self.df[((self.df['img_length_of_stay'] < 48) & (self.df['death_status'] == 0))]
             df_alive_big48 = self.df[((self.df['img_length_of_stay'] >= 48) & (self.df['death_status'] == 0))]
@@ -108,6 +109,13 @@ class DataSplit():
 
             self.df = self.df.drop(['img_id', 'img_charttime', 'img_deltacharttime', 'discharge_location', 'img_length_of_stay', 
                     'death_status'], axis = 1)
+            
+        else:
+            self.df = self.df[self.df[partition].isin([0,1])]
+            self.df = self.df.drop(['img_id', 'img_charttime', 'img_deltacharttime', 'discharge_location', 'img_length_of_stay', 
+                    'death_status'], axis = 1)
+
+            self.df['y'] = self.df[partition]
 
     def split_data(self, partition, test_size=0.1, validation_size=0.25, random_state=42):
 
@@ -144,32 +152,11 @@ class DataSplit():
         return train_cols, val_cols, test_cols
         
 
-
-def data_split(df, pkl_list):
-    train_id, val_id = train_test_split(pkl_list, test_size=0.3, random_state=42)
-    val_id, test_id = train_test_split(val_id, test_size=0.25, random_state=42)
-
-    train_idx = df[df['haim_id'].isin(train_id)]['haim_id'].tolist()
-    val_idx = df[df['haim_id'].isin(val_id)]['haim_id'].tolist()
-    test_idx = df[df['haim_id'].isin(test_id)]['haim_id'].tolist()
-
-    x_train = df[df['haim_id'].isin(train_idx)].drop(['haim_id','y'],axis=1).values
-    x_val = df[df['haim_id'].isin(val_idx)].drop(['haim_id','y'],axis=1).values
-    x_test = df[df['haim_id'].isin(test_idx)].drop(['haim_id','y'],axis=1).values
-
-    y_train = df[df['haim_id'].isin(train_idx)]['y'].values
-    y_val = df[df['haim_id'].isin(val_idx)]['y'].values
-    y_test = df[df['haim_id'].isin(test_idx)]['y'].values
-
-    return x_train, x_val, x_test, y_train, y_val, y_test
-
-
 def custom_output(emb, gemma):
     outputs = gemma(inputs_embeds=emb)
     noyes = [956, 3276]
     logits = outputs['logits']
-    logits = logits[:,-32:,noyes].mean(dim=1)
-    probs = torch.softmax(logits, dim=-1)
+    logits = logits[:,-1:,noyes].mean(dim=1)
     return logits
 
 def output_to_label(z):
@@ -193,7 +180,7 @@ def output_to_label(logits):
 """
 
 
-def train_epoch(model, optimizer, loss_fn, train_loader, device):
+def train_epoch(model, optimizer, mse_loss, bce_loss, train_loader, device, gemma, beta):
     # Train:
     model.train()
     train_loss_batches = []
@@ -201,9 +188,17 @@ def train_epoch(model, optimizer, loss_fn, train_loader, device):
         inputs, labels = x.to(device), y.to(device)
         optimizer.zero_grad()
 
-        outputs = model(inputs)
+        encoded = model.encoder(inputs)
+        decoded = model.decoder(encoded)
+
+        tmp = encoded.view(-1,1,2048)
+        tmp = tmp.to(torch.float16)
+        logits = custom_output(tmp, gemma).float()
         
-        loss = loss_fn(outputs, inputs)
+        loss_bce = bce_loss(logits, labels.long())
+        loss_mse = mse_loss(decoded, inputs)
+        loss = loss_bce + beta*loss_mse
+
         loss.backward()
         optimizer.step()
         train_loss_batches.append(loss.item())
@@ -211,47 +206,77 @@ def train_epoch(model, optimizer, loss_fn, train_loader, device):
     return model, train_loss_batches
 
 
-def validate(model, loss_fn, val_loader, device):
+def validate(model, mse_loss, bce_loss, val_loader, device, gemma, beta):
     val_loss_cum = 0
     val_acc_cum = 0
+    preds = []
+    list_labels = []
+
     model.eval()
     with torch.no_grad():
         for batch_index, (x, y) in enumerate(val_loader, 1):
             inputs, labels = x.to(device), y.to(device)
 
-            outputs = model(inputs)
-        
-            batch_loss = loss_fn(outputs, inputs)
+            encoded = model.encoder(inputs)
+            decoded = model.decoder(encoded)
 
-            val_loss_cum += batch_loss.item()
+            tmp = encoded.view(-1,1,2048)
+            tmp = tmp.to(torch.float16)
+            logits = custom_output(tmp, gemma).float()
+            
+            loss_bce = bce_loss(logits, labels.long())
+            loss_mse = mse_loss(decoded, inputs)
+            loss = loss_bce + beta*loss_mse
 
-    return val_loss_cum/len(val_loader)
+            hard_preds = output_to_label(logits)
+            hard_preds = torch.argmax(hard_preds, dim=1)
+
+            preds.extend(hard_preds)
+            list_labels.extend(labels)
+
+            val_loss_cum += loss.item()
+
+    return val_loss_cum/len(val_loader), preds, list_labels
 
 
-def training_loop(model, optimizer, loss_fn, train_loader, val_loader, num_epochs, scheduler):
+def training_loop(model, optimizer, mse_loss, bce_loss, train_loader, val_loader, num_epochs, scheduler, gemma, beta):
     print("Starting training")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
     train_losses, val_losses= [], []
     best_val_loss = float('inf')
+    best_f1 = 0
 
     for epoch in range(1, num_epochs+1):
         model, train_loss = train_epoch(model,
-                                                   optimizer,
-                                                   loss_fn,
-                                                   train_loader,
-                                                   device)
-        val_loss = validate(model, loss_fn, val_loader, device)
+                                        optimizer,
+                                        mse_loss,
+                                        bce_loss,
+                                        train_loader,
+                                        device,
+                                        gemma,
+                                        beta)
+        val_loss, preds, labels = validate(model, mse_loss, bce_loss, val_loader, device, gemma, beta)
+        
+        preds_arrays = [t.cpu().numpy() for t in preds]
+        preds = np.array(preds_arrays)
+
+        labels_arrays = [t.cpu().numpy() for t in labels]
+        labels = np.array(labels_arrays)
+
+        f1_score = metrics.f1_score(labels, preds)
+
         scheduler.step(val_loss)
         print(f"Epoch {epoch}/{num_epochs}: "
               f"Train loss: {sum(train_loss)/len(train_loss):.3f}, "
               f"Val. loss: {val_loss:.3f}, ")
         train_losses.append(sum(train_loss)/len(train_loss))
         val_losses.append(val_loss)
-        folder = 'results/ts_pe/autoencoder_allts'
 
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
+        folder = 'results/auto_vd'
+
+        if f1_score > best_f1:
+            best_f1 = f1_score
             torch.save(model, f"{folder}/model.pth")
 
         with open(f"{folder}/train_losses.pkl", 'wb') as f1:

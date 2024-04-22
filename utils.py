@@ -46,7 +46,7 @@ class DataSplit():
             self.df = self.df.drop(['img_id', 'img_charttime', 'img_deltacharttime', 'discharge_location', 'img_length_of_stay', 
                     'death_status'], axis = 1)
 
-        if partition == 'los':
+        elif partition == 'los':
 
             df_alive_small48 = self.df[((self.df['img_length_of_stay'] < 48) & (self.df['death_status'] == 0))]
             df_alive_big48 = self.df[((self.df['img_length_of_stay'] >= 48) & (self.df['death_status'] == 0))]
@@ -59,6 +59,13 @@ class DataSplit():
 
             self.df = self.df.drop(['img_id', 'img_charttime', 'img_deltacharttime', 'discharge_location', 'img_length_of_stay', 
                     'death_status'], axis = 1)
+            
+        else:
+            self.df = self.df[self.df[partition].isin([0,1])]
+            self.df = self.df.drop(['img_id', 'img_charttime', 'img_deltacharttime', 'discharge_location', 'img_length_of_stay', 
+                    'death_status'], axis = 1)
+
+            self.df['y'] = self.df[partition]
 
     def split_data(self, partition, test_size=0.1, validation_size=0.25, random_state=42):
 
