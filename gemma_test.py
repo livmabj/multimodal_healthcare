@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from focal_loss.focal_loss import FocalLoss
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, RandomSampler
 import pandas as pd
 import numpy as np
 from sklearn import metrics
@@ -52,16 +52,30 @@ df = pd.read_csv(fname)
 batch_size = 8
 
 Data = DataSplit(df)
-Data.split_data('mortality', random_state=1)
+Data.split_data('mortality')
 
-X,V,T = Data.get_type('ts_pe_')
-train_set = CustomDatasetG(X.values.tolist(), Data.y_train)
-val_set = CustomDatasetG(V.values.tolist(), Data.y_validation)
+X,V,T = Data.get_type('vd_')
 
-train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, collate_fn=collate_batch)
+
+from sklearn.model_selection import train_test_split
+
+# Split the dataset into training and testing sets while preserving the label distribution
+X_train, X_test, y_train, y_test = train_test_split(T.values.tolist(), Data.y_test, test_size=0.25, stratify=Data.y_test)
+
+# Now you can use X_train and y_train as your smaller dataset while preserving the label distribution
+
+
+train_set = CustomDatasetG(X_train, y_train)
+val_set = CustomDatasetG(X_test, y_test)
+#train_set = CustomDatasetG(X.values.tolist(), Data.y_train)
+#val_set = CustomDatasetG(V.values.tolist(), Data.y_validation)
+
+sampler = RandomSampler(train_set, replacement=False)
+
+train_loader = DataLoader(train_set, batch_size=batch_size, sampler=sampler, collate_fn=collate_batch) #shuffle=True
 val_loader = DataLoader(val_set, batch_size=batch_size, collate_fn=collate_batch)
 
-y_train = [0 if value == ' No' else 1 for value in Data.y_train]
+#y_train = [0 if value == ' No' else 1 for value in Data.y_train]
 
 #class_0_count = y_train.count(0)
 #class_1_count = y_train.count(1)
@@ -85,8 +99,8 @@ for class_idx in no_class:
 weights = torch.tensor(class_weights, dtype = torch.float).to("cuda")
 
 # Setting model and hyperparameters
-model = torch.load('results_0/model.pth').to('cuda')
-optimizer = optim.Adam(gemma.parameters(), lr=0.001)
+model = torch.load('results/vd/autoencoder_and_clf/model.pth').to('cuda')
+optimizer = optim.Adam(gemma.parameters(), lr=0.00001, weight_decay=0.00003)
 loss_fn = nn.CrossEntropyLoss(weight=weights)
 #loss_fn = FocalLoss(gamma=12)
 
