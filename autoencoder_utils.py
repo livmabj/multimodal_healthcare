@@ -70,8 +70,18 @@ class CustomDataset(Dataset):
     
     def __getitem__(self, index):
         vector = torch.tensor(self.vectors[index]).float()
+
+        vd = vector[:1024]
+        vmd = vector[1024:2048]
+        ts_ce = vector[2048:2147]
+        ts_le = vector[2147:2389]
+        ts_pe = vector[2389:2499]
+        n_rad = vector[2499:]
+
+        feature_dict = {'vd': vd, 'vmd': vmd, 'ts_ce': ts_ce, 'ts_le': ts_le, 'ts_pe': ts_pe, 'n_rad': n_rad}
+
         label = torch.from_numpy(np.array([self.labels[index]]))
-        return vector, label.squeeze()
+        return feature_dict, label.squeeze()
 
 
 class DataSplit():
@@ -83,7 +93,53 @@ class DataSplit():
 
     def partitiondata(self, partition):
         self.pkl_list = []
-        if partition == 'mortality':
+
+        if partition == 'all':
+            df_mor = self.df
+
+            df_death_small48 = df_mor[((df_mor['img_length_of_stay'] < 48) & (df_mor['death_status'] == 1))]
+            df_alive_big48 = df_mor[((df_mor['img_length_of_stay'] >= 48) & (df_mor['death_status'] == 0))]
+            df_death_big48 = df_mor[((df_mor['img_length_of_stay'] >= 48) & (df_mor['death_status'] == 1))]
+            df_alive_small48 = df_mor[((df_mor['img_length_of_stay'] < 48) & (df_mor['death_status'] == 0))]
+
+            df_death_small48['y'] = 1
+            df_alive_big48['y'] = 0
+            df_death_big48['y'] = 0
+            df_alive_small48['y'] = 0
+            df_mor = pd.concat([df_death_small48, df_alive_big48, df_death_big48, df_alive_small48], axis = 0)
+
+            df_los = self.df
+
+            df_alive_small48 = df_los[((df_los['img_length_of_stay'] < 48) & (df_los['death_status'] == 0))]
+            df_alive_big48 = df_los[((df_los['img_length_of_stay'] >= 48) & (df_los['death_status'] == 0))]
+            df_death = df_los[(df_los['death_status'] == 1)]
+
+            df_alive_small48['y'] = 1
+            df_alive_big48['y'] = 0
+            df_death['y'] = 0
+            df_los = pd.concat([df_death_small48, df_alive_big48, df_death_big48, df_alive_small48], axis = 0)
+
+            self.df['48-hour Mortality'] = df_mor['y']
+            self.df['Length-of-Stay'] = df_los['y']
+
+            self.df['y'] = self.df.apply(lambda row: [row['Fracture'], row['Lung Lesion'], row['Enlarged Cardiomediastinum'], 
+                                          row['Consolidation'], row['Pneumonia'], row['Atelectasis'], row['Lung Opacity'], row['Pneumothorax'],
+                                          row['Edema'], row['Cardiomegaly'], row['Length-of-Stay'], row['48-hour Mortality']], axis=1)
+
+            self.df = self.df.drop(['img_id', 'img_charttime', 'img_deltacharttime', 'discharge_location', 'img_length_of_stay', 
+                    'death_status', 'split', 'No Finding', 'Fracture', 'Lung Lesion', 'Enlarged Cardiomediastinum', 'Consolidation', 'Pneumonia', 
+                    'Atelectasis', 'Lung Opacity', 'Lung Opacity', 'Pneumothorax', 'Edema', 'Cardiomegaly', 'Pleural Effusion', 
+                    'Pleural Other', 'Support Devices', 'PerformedProcedureStepDescription', 'ViewPosition', 
+                    '48-hour Mortality', 'Length-of-Stay'], axis = 1)
+            self.df = self.df.drop(list(self.df.filter(regex='^de_')), axis = 1)
+            self.df = self.df.drop(list(self.df.filter(regex='^vp_')), axis = 1)
+            self.df = self.df.drop(list(self.df.filter(regex='^vmp_')), axis = 1)
+
+            # Remove outliers from n_rad-features
+            n_rad_columns = [col for col in self.df.columns if col.startswith('n_rad_')]
+            self.df = self.df[~(self.df[n_rad_columns] > 10).any(axis=1)]
+
+        elif partition == 'mortality':
 
             df_death_small48 = self.df[((self.df['img_length_of_stay'] < 48) & (self.df['death_status'] == 1))]
             df_alive_big48 = self.df[((self.df['img_length_of_stay'] >= 48) & (self.df['death_status'] == 0))]
@@ -117,7 +173,7 @@ class DataSplit():
 
             self.df['y'] = self.df[partition]
 
-    def split_data(self, partition, test_size=0.1, validation_size=0.25, random_state=42):
+    def split_data(self, partition, validation_size=0.25, random_state=42):
 
         self.partition = partition
 
@@ -127,29 +183,23 @@ class DataSplit():
         # Split into training and test sets
         train_id, val_id = train_test_split(pkl_list, test_size=validation_size, random_state=random_state)
 
-        remaining_data_size = 1.0 - validation_size
-        test_size = test_size*remaining_data_size
-
-        # Further split the training set into training and validation sets
-        train_id, test_id = train_test_split(train_id, test_size=test_size, random_state=random_state)
-
         train_idx = self.df[self.df['haim_id'].isin(train_id)]['haim_id'].tolist()
         validation_idx = self.df[self.df['haim_id'].isin(val_id)]['haim_id'].tolist()
-        test_idx = self.df[self.df['haim_id'].isin(test_id)]['haim_id'].tolist()
 
         self.x_train = self.df[self.df['haim_id'].isin(train_idx)].drop(['y','haim_id'],axis=1)
-        self.x_validation = self.df[self.df['haim_id'].isin(validation_idx)].drop(['y','haim_id'],axis=1)
-        self.x_test = self.df[self.df['haim_id'].isin(test_idx)].drop(['y','haim_id'],axis=1)
+        self.x_val = self.df[self.df['haim_id'].isin(validation_idx)].drop(['y','haim_id'],axis=1)
+        
+        # Normalize according to mean and std of training set
+        self.x_train = (self.x_train - self.x_train.mean())/self.x_train.std()
+        self.x_val = (self.x_val - self.x_train.mean())/self.x_train.std()
 
         self.y_train = self.df[self.df['haim_id'].isin(train_idx)]['y']
-        self.y_validation = self.df[self.df['haim_id'].isin(validation_idx)]['y']
-        self.y_test = self.df[self.df['haim_id'].isin(test_idx)]['y']
+        self.y_val = self.df[self.df['haim_id'].isin(validation_idx)]['y']
 
-    def get_type(self, requested):
-        train_cols = self.x_train.filter(regex='^'+requested)
-        val_cols = self.x_validation.filter(regex='^'+requested)
-        test_cols = self.x_test.filter(regex='^'+requested)
-        return train_cols, val_cols, test_cols
+    def get_data(self):
+        train_cols = self.x_train
+        val_cols = self.x_val
+        return train_cols, val_cols
         
 
 def custom_output(emb, gemma):
