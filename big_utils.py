@@ -185,17 +185,13 @@ def custom_mse_loss(decoded, input, mse_loss):
 
     return avg_mse
 
-def output_to_label(z):
-    """Map network output z to a hard label {0, 1}
-    
-    Args:
-        z (Tensor): Probabilities for each sample in a batch.
-    Returns:
-        c (Tensor): Hard label {0, 1} for each sample in a batch
-    """
-    # YOUR CODE HERE
-    c = torch.round(z)
-    return c.long()
+def output_to_label(binary_logits, ternary_logits):
+    binary = [binary_logits[i:i+2] for i in range(0, binary_logits.size(0), 2)]
+    ternary = [ternary_logits[i:i+3] for i in range(0, ternary_logits.size(0), 3)]
+    logits = binary + ternary
+    probs = torch.softmax(torch.tensor(logits), dim=1)
+    hard_preds = torch.argmax(probs, dim=1)
+    return hard_preds
 
 
 """
@@ -290,8 +286,7 @@ def validate(vd_model, ts_model, n_rad_model, mse_loss, loss_fns, val_loader, de
             loss_mse = custom_mse_loss(all_decoded, inputs)
             loss = loss_bce + beta*loss_mse
 
-            hard_preds = output_to_label(logits)
-            hard_preds = torch.argmax(hard_preds, dim=1)
+            hard_preds = output_to_label(binary_logits, ternary_logits)
 
             preds.extend(hard_preds)
             list_labels.extend(labels)
