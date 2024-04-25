@@ -31,18 +31,27 @@ df = pd.read_csv(fname)
 batch_size = 8
 
 Data = DataSplit(df)
-Data.split_data('mortality')
+Data.split_data('all')
 
-X, V, T = Data.get_type('vd_')
+X, V = Data.get_data()
 
 torch.manual_seed(42)
 
 train_set = CustomDataset(X.values.tolist(), Data.y_train.tolist())
-val_set = CustomDataset(V.values.tolist(), Data.y_validation.tolist())
+val_set = CustomDataset(V.values.tolist(), Data.y_val.tolist())
 
-w0 = len(Data.y_train)/(2*sum(Data.y_train == 0))
-w1 = len(Data.y_train)/(2*sum(Data.y_train == 1))
-weights = torch.tensor([w0, w1], dtype = torch.float).to("cuda")
+transposed_Y = list(map(list, zip(*Data.y_train.tolist())))
+
+weight_per_class = []
+for y in transposed_Y[:2]:
+    w0 = len(y)/(2*sum(y.tolist() == 0))
+    w1 = len(y)/(2*sum(y.tolist() == 1))
+    weight_per_class.append(torch.tensor([w0, w1], dtype = torch.float).to("cuda"))
+for y in transposed_Y[2:]:
+    w0 = len(y)/(2*sum(y.tolist() == 0))
+    w1 = len(y)/(2*sum(y.tolist() == 1))
+    w2 = len(y)/(2*sum(y.tolist() == -1))
+    weight_per_class.append(torch.tensor([w0, w1, w2], dtype = torch.float).to("cuda"))
 
 sampler = RandomSampler(train_set, replacement=False)
 
@@ -61,7 +70,9 @@ n_rad_optimizer = optim.Adam(vd_model.parameters(), lr=0.003, weight_decay=0.003
 optimizers = [vd_optimizer, ts_optimizer, n_rad_optimizer]
 #scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer=optimizer, patience=7)
 loss_mse = nn.MSELoss()
-loss_bce = nn.CrossEntropyLoss(weight=weights)
+loss_fns = []
+for weight in weight_per_class:
+    loss_fns.append(nn.CrossEntropyLoss(weight=weight))
 
 num_epochs = 50
 beta = 0.1
@@ -71,4 +82,4 @@ models = [vd_model]
 optimizers = [vd_optimizer]
 # Run training
 
-fine_tuned, train_losses, val_losses = training_loop(vd_model, ts_model, n_rad_model, optimizers, loss_mse, loss_bce, train_loader, val_loader, num_epochs, gemma, beta)
+fine_tuned_vd, fine_tuned_ts, fine_tuned_n_rad, train_losses, val_losses = training_loop(vd_model, ts_model, n_rad_model, optimizers, loss_mse, loss_fns, train_loader, val_loader, num_epochs, gemma, beta)
