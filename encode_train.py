@@ -1,5 +1,5 @@
 import pickle
-#from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -15,47 +15,75 @@ from autoencoder_utils import *
 # Filepath to embeddings
 fname = '/mnt/mimic/data/HAIM/mimic_extras/embeddings.csv'
 
+quantization_config = BitsAndBytesConfig(load_in_4bit=True, 
+                                         bnb_4bit_use_double_quant=True,
+                                         bnb_4bit_quant_type="nf4",
+                                         bnb_4bit_compute_dtype=torch.bfloat16)
+
+tokenizer = AutoTokenizer.from_pretrained("google/gemma-2b")
+gemma = AutoModelForCausalLM.from_pretrained("google/gemma-2b", device_map="auto", quantization_config=quantization_config)
 
 # Read data & extract labels and features
 df = pd.read_csv(fname)
 
 
 # Load train/val sets and create data loaders
-batch_size = 32
+batch_size = 8
 
 Data = DataSplit(df)
-Data.split_data('mortality')
-
-X_pe,V_pe,T = Data.get_type('ts_pe_')
-X_ce,V_ce,T = Data.get_type('ts_ce_')
-X_le,V_le,T = Data.get_type('ts_le_')
+Data.split_data('all')
+X, V = Data.get_data()
 
 torch.manual_seed(42)
 
-concatenated_train = [l1 + l2 + l3 for l1, l2, l3 in zip(X_pe.values.tolist(),X_ce.values.tolist(),X_le.values.tolist())]
-concatenated_val = [l1 + l2 + l3 for l1, l2, l3 in zip(V_pe.values.tolist(),V_ce.values.tolist(),V_le.values.tolist())]
 
+Data.y_train = Data.y_train.apply(lambda lst: [2 if x == -1 else x for x in lst])
+Data.y_val = Data.y_val.apply(lambda lst: [2 if x == -1 else x for x in lst])
 
-#train_set = CustomDataset(X.values.tolist(), Data.y_train.tolist())
-#val_set = CustomDataset(V.values.tolist(), Data.y_validation.tolist())
-train_set = CustomDataset(concatenated_train, Data.y_train.tolist())
-val_set = CustomDataset(concatenated_val, Data.y_validation.tolist())
+train_set = CustomDataset(X.values.tolist(), Data.y_train.tolist())
+val_set = CustomDataset(V.values.tolist(), Data.y_val.tolist())
 
-sampler = RandomSampler(train_set, replacement=False)
+transposed_Y = list(map(list, zip(*Data.y_train.tolist())))
 
-train_loader = DataLoader(train_set, batch_size=batch_size, sampler=sampler, num_workers=5)
+weight_per_class = []
+
+for y in transposed_Y[:-2]:
+    y = torch.tensor(y)
+    w0 = len(y)/(2*sum(y == 0))
+    w1 = len(y)/(2*sum(y == 1))
+    w2 = len(y)/(2*sum(y == 2))
+    weight_per_class.append(torch.tensor([w0, w1, w2], dtype = torch.float).to("cuda"))
+
+for y in transposed_Y[-2:]:
+    y = torch.tensor(y)
+    w0 = len(y)/(2*sum(y == 0))
+    w1 = len(y)/(2*sum(y == 1))
+    weight_per_class.append(torch.tensor([w0, w1], dtype = torch.float).to("cuda"))
+
+train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=5)
 val_loader = DataLoader(val_set, batch_size=batch_size, num_workers=5)
 
 
 
 # Setting model and hyperparameters
-model = AutoEncoder(451,2048)
-optimizer = optim.Adam(model.parameters(), lr=0.1, weight_decay=0.0003) #0.00003
-scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer=optimizer, patience=7)
-loss_fn = nn.MSELoss()
+vd_model = AutoEncoder(1024,2048)
+ts_model = AutoEncoder(110,2048)
+n_rad_model = AutoEncoder(768,2048)
+models = [vd_model, ts_model, n_rad_model]
+
+vd_optimizer = optim.Adam(vd_model.parameters(), lr=0.0005, weight_decay=0.0003)
+ts_optimizer = optim.Adam(ts_model.parameters(), lr=0.0005, weight_decay=0.0003)
+n_rad_optimizer = optim.Adam(n_rad_model.parameters(), lr=0.0005, weight_decay=0.0003)
+optimizers = [vd_optimizer, ts_optimizer, n_rad_optimizer]
+
+loss_mse = nn.MSELoss()
+loss_fns = []
+for weight in weight_per_class:
+    loss_fns.append(nn.CrossEntropyLoss(weight=weight))
 
 num_epochs = 50
+beta = 0.1
 
 # Run training
 
-fine_tuned, train_losses, val_losses = training_loop(model, optimizer, loss_fn, train_loader, val_loader, num_epochs, scheduler)
+fine_tuned, train_losses, val_losses = training_loop(models, optimizers, loss_mse, loss_fns, train_loader, val_loader, num_epochs, gemma, beta)
