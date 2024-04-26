@@ -81,7 +81,7 @@ loss_fns = []
 for weight in weight_per_class:
     loss_fns.append(nn.CrossEntropyLoss(weight=weight))
 
-num_epochs = 50
+num_epochs = 2
 beta = 0.1
 
 # Run training

@@ -222,7 +222,7 @@ def custom_output(emb, gemma):
     outputs = gemma(inputs_embeds=emb)
     class_labels = [101, 102, 103, 201, 202, 203, 301, 302, 303, 401, 402, 403, 501, 502, 503, 601, 602, 603, 701, 702, 703, 801, 802, 803, 901, 902, 903, 1001, 1002, 1003, 1101, 1102, 1201, 1202] # 956, 3276
     logits = outputs['logits']
-    logits = logits[:,-1:,class_labels].mean(dim=1) #-3
+    logits = logits[:,-3:,class_labels].mean(dim=1) #-3
     binary_logits = logits[:, -4:].float()
     ternary_logits = logits[:, :-4].float()
     return binary_logits, ternary_logits
@@ -278,12 +278,26 @@ def custom_mse_loss(decoded, inputs, mse_loss, device):
 
 
 def output_to_label(binary_logits, ternary_logits):
-    binary = [binary_logits[:,i:i+2] for i in range(0, binary_logits.size(0), 2)]
-    ternary = [ternary_logits[:,i:i+3] for i in range(0, ternary_logits.size(0), 3)]
-    logits = binary + ternary
-    probs = torch.softmax(torch.tensor(logits), dim=1)
-    hard_preds = torch.argmax(probs, dim=1)
-    return hard_preds
+    probs = []
+    preds = []
+    binary = [binary_logits[:, :2], binary_logits[:, 2:]]
+    ternary_class_logits = ternary_logits.view(8,10,3)
+    ternary = [ternary_class_logits[:, i, :] for i in range(10)]
+    logits_list = ternary + binary
+    for logits_tensor in logits_list:
+
+        probs_tensor = F.softmax(logits_tensor, dim=1)
+        max_probs, max_indices = torch.max(probs_tensor, dim=1)
+
+        probs.append(max_probs)
+        preds.append(max_indices)
+
+    probs_tensor = torch.stack(probs)
+    preds_tensor = torch.stack(preds)
+    transposed_probs = probs_tensor.transpose(0, 1)
+    transposed_preds = preds_tensor.transpose(0, 1)
+
+    return transposed_probs, transposed_preds
 
 
 
@@ -299,11 +313,14 @@ def output_to_label(binary_logits, ternary_logits):
 ####
 def train_epoch(models, optimizers, mse_loss, loss_fns, train_loader, device, gemma, beta):
     # Train:
+    max_batches = 5
     for model in models:
         model.train()
     
     train_loss_batches = []
     for batch_index, (x, y) in enumerate(train_loader, 1):
+        if batch_index >= max_batches:
+            break
         inputs, labels = x, y.to(device)
 
         for optimizer in optimizers:
@@ -353,29 +370,31 @@ def validate(models, mse_loss, loss_fns, val_loader, device, gemma, beta):
 
     for model in models:
         model.eval()
-    
+    max_batches = 5
     with torch.no_grad():
         for batch_index, (x, y) in enumerate(val_loader, 1):
+            if batch_index >= max_batches:
+                break
             inputs, labels = x, y.to(device)
 
             vd_inputs = x['vd'].to(device)
             ts_inputs = x['ts_pe'].to(device)
             n_rad_inputs = x['n_rad'].to(device)
 
-            encoded_vd = model.encoder(vd_inputs).view(-1,1,2048).to(torch.float16)
-            encoded_ts = model.encoder(ts_inputs).view(-1,1,2048).to(torch.float16)
-            encoded_n_rad = model.encoder(n_rad_inputs).view(-1,1,2048).to(torch.float16)
+            encoded_vd = models[0].encoder(vd_inputs)
+            encoded_ts = models[1].encoder(ts_inputs)
+            encoded_n_rad = models[2].encoder(n_rad_inputs)
 
-            decoded_vd = model.decoder(encoded_vd)
-            decoded_ts = model.decoder(encoded_ts)
-            decoded_n_rad = model.decoder(encoded_n_rad)
-
-            binary_logits, ternary_logits = custom_output(concat_emb, gemma)
+            decoded_vd = models[0].decoder(encoded_vd)
+            decoded_ts = models[1].decoder(encoded_ts)
+            decoded_n_rad = models[2].decoder(encoded_n_rad)
 
             #decoded = [('vd', decoded_vd), ('ts',decoded_ts), ('n_rad', decoded_n_rad)]
+            inputs = [vd_inputs, ts_inputs, n_rad_inputs]
             decoded = [decoded_vd, decoded_ts, decoded_n_rad]
 
-            concat_emb = torch.cat((encoded_vd, encoded_ts, encoded_n_rad), dim=1).to(device)
+            concat_emb = torch.cat((encoded_vd.view(-1,1,2048).to(torch.float16), encoded_ts.view(-1,1,2048).to(torch.float16), 
+                                encoded_n_rad.view(-1,1,2048).to(torch.float16)), dim=1).to(device)
 
             binary_logits, ternary_logits = custom_output(concat_emb, gemma) 
 
@@ -383,7 +402,7 @@ def validate(models, mse_loss, loss_fns, val_loader, device, gemma, beta):
             loss_mse = custom_mse_loss(decoded, inputs, mse_loss, device)
             loss = loss_bce + beta*loss_mse
 
-            hard_preds = output_to_label(binary_logits, ternary_logits)
+            probabilities, hard_preds = output_to_label(binary_logits, ternary_logits)
 
             preds.extend(hard_preds)
             list_labels.extend(labels)
@@ -420,8 +439,9 @@ def training_loop(models, optimizers, mse_loss, loss_fns, train_loader, val_load
 
         labels_arrays = [t.cpu().numpy() for t in labels]
         labels = np.array(labels_arrays)
+        masked_labels = np.where(np.isnan(labels), -1, labels)
 
-        f1_score = metrics.f1_score(labels, preds)
+        f1_score = metrics.f1_score(masked_labels, preds, average='micro')
 
         print(f"Epoch {epoch}/{num_epochs}: "
               f"Train loss: {sum(train_loss)/len(train_loss):.3f}, "
