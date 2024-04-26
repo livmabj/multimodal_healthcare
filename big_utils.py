@@ -14,6 +14,16 @@ EMBEDDING_SIZE = 1024
 PROJECTION_SIZE = 32
 
 
+
+
+
+####
+####
+####
+####                                                                                ARCHITECTURES FOR PROJECTION MODULES
+####
+####
+####
 class AutoEncoder(nn.Module):
     def __init__(self, input_dim, latent_dim):
         super(AutoEncoder, self).__init__()
@@ -32,6 +42,22 @@ class AutoEncoder(nn.Module):
         return decoded
 
 
+
+
+
+
+
+
+
+####
+####
+####
+####                                                                                DATA-RELATED CODE
+####                                                                        Includes a custom dataset class as well
+####                                                                        as a preproccesing and data splitting class
+####
+####
+####
 class CustomDataset(Dataset):
     def __init__(self, vectors, labels):
         self.vectors = vectors
@@ -45,16 +71,14 @@ class CustomDataset(Dataset):
 
         vd = vector[:1024]
         vmd = vector[1024:2048]
-        ts = vector[2048:2499]
-        #ts_ce = vector[2048:2147]
-        #ts_le = vector[2147:2389]
-        #ts_pe = vector[2389:2499]
+        ts_ce = vector[2048:2147]
+        ts_le = vector[2147:2389]
+        ts_pe = vector[2389:2499]
         n_rad = vector[2499:]
 
-        feature_dict = {'vd': vd, 'vmd': vmd, 'ts': ts, 'n_rad': n_rad} #'ts_ce': ts_ce, 'ts_le': ts_le, 'ts_pe': ts_pe,
+        feature_dict = {'vd': vd, 'vmd': vmd, 'ts_ce': ts_ce, 'ts_le': ts_le, 'ts_pe': ts_pe, 'n_rad': n_rad}
 
         label = torch.from_numpy(np.array([self.labels[index]]))
-        label[label == -1] = 2
         return feature_dict, label.squeeze()
 
 
@@ -111,7 +135,8 @@ class DataSplit():
 
             # Remove outliers from n_rad-features
             n_rad_columns = [col for col in self.df.columns if col.startswith('n_rad_')]
-            self.df = self.df[~(self.df[n_rad_columns] > 2000).any(axis=1)]
+            self.df = self.df[~(self.df[n_rad_columns] > 10).any(axis=1)]
+            self.df = self.df.dropna()
 
         elif partition == 'mortality':
 
@@ -164,8 +189,15 @@ class DataSplit():
         self.x_val = self.df[self.df['haim_id'].isin(validation_idx)].drop(['y','haim_id'],axis=1)
         
         # Normalize according to mean and std of training set
-        self.x_train = (self.x_train - self.x_train.mean())/self.x_train.std()
-        self.x_val = (self.x_val - self.x_train.mean())/self.x_train.std()
+        for column in self.x_train.columns:
+            mean = self.x_train[column].mean()
+            std = self.x_train[column].std()
+            
+            if std != 0:
+                self.x_train[column] = (self.x_train[column] - mean) / std
+                self.x_val[column] = (self.x_val[column] - mean) / std
+            else:
+                continue
 
         self.y_train = self.df[self.df['haim_id'].isin(train_idx)]['y']
         self.y_val = self.df[self.df['haim_id'].isin(validation_idx)]['y']
@@ -174,18 +206,27 @@ class DataSplit():
         train_cols = self.x_train
         val_cols = self.x_val
         return train_cols, val_cols
+        
 
 
+
+
+####
+####
+####
+####                                                                                HELPER FUNCTIONS
+####
+####
+####
 def custom_output(emb, gemma):
-
     outputs = gemma(inputs_embeds=emb)
     class_labels = [101, 102, 103, 201, 202, 203, 301, 302, 303, 401, 402, 403, 501, 502, 503, 601, 602, 603, 701, 702, 703, 801, 802, 803, 901, 902, 903, 1001, 1002, 1003, 1101, 1102, 1201, 1202] # 956, 3276
     logits = outputs['logits']
-
     logits = logits[:,-1:,class_labels].mean(dim=1) #-3
     binary_logits = logits[:, -4:].float()
     ternary_logits = logits[:, :-4].float()
     return binary_logits, ternary_logits
+
 
 def binary_loss(logits, labels, loss_fns):
     labels = labels[:, -2:]
@@ -220,28 +261,21 @@ def custom_bce_loss(binary_logits, ternary_logits, labels, loss_fns):
     binary_losses = binary_loss(binary_logits, labels, loss_fns[-2:]) #the last two loss functions are weighted for the binary classes
     ternary_losses = ternary_loss(ternary_logits, labels, loss_fns[:-2]) #the rest of the loss functions are weighted for the pathogen classification
     losses = binary_losses + ternary_losses
-    avg_bce = torch.mean(torch.tensor(losses))
+    avg_bce = sum(losses) / len(losses)
 
     return avg_bce
 
-def custom_mse_loss(decoded, input, mse_loss, device):
-    losses = []
-    for i, output in enumerate(decoded):
-        mod, out = output
-        original_emb = input[mod].requires_grad_().to(device)
-        print(torch.isnan(original_emb).any())
-        print(torch.isnan(out).any())
-        original_no_nan = torch.nan_to_num(original_emb, nan=0.0)
-        out_no_nan = torch.nan_to_num(out, nan=0.0)
-        print(torch.isnan(original_no_nan).any())
-        print(torch.isnan(out_no_nan).any())
-        print(original_no_nan.shape)
-        print(out_no_nan.shape)
-        losses.append(mse_loss(out_no_nan, original_no_nan))
 
-    avg_mse = torch.mean(torch.tensor(losses))
+def custom_mse_loss(decoded, inputs, mse_loss, device):
+
+    vd_loss = mse_loss(decoded[0], inputs[0])
+    ts_loss = mse_loss(decoded[1], inputs[1])
+    n_rad_loss = mse_loss(decoded[2], inputs[2])
+
+    avg_mse = (vd_loss + ts_loss + n_rad_loss) / 3
 
     return avg_mse
+
 
 def output_to_label(binary_logits, ternary_logits):
     binary = [binary_logits[:,i:i+2] for i in range(0, binary_logits.size(0), 2)]
@@ -252,102 +286,101 @@ def output_to_label(binary_logits, ternary_logits):
     return hard_preds
 
 
-"""
-def output_to_label(logits):
-    probs = torch.softmax(logits, dim=-1)
-    predicted_token_id = torch.argmax(probs, dim=-1)
-    return predicted_token_id
-"""
 
 
-def train_epoch(vd_model, ts_model, n_rad_model, optimizers, mse_loss, loss_fns, train_loader, device, gemma, beta):
+
+
+####
+####
+####
+####                                                                                TRAINING LOOPS
+####
+####
+####
+def train_epoch(models, optimizers, mse_loss, loss_fns, train_loader, device, gemma, beta):
     # Train:
-    #vd_model.train()
-    #ts_model.train()
-    n_rad_model.train()
+    for model in models:
+        model.train()
+    
     train_loss_batches = []
     for batch_index, (x, y) in enumerate(train_loader, 1):
-        #print('stuck')
         inputs, labels = x, y.to(device)
-        #for optimizer in optimizers:
-        #    optimizer.zero_grad()
-        optimizers[2].zero_grad()
 
-        all_decoded = []
-        # vd_encoded = vd_model.encoder(inputs['vd'].to(device))
-        # print('vd_orig', inputs['vd'])
-        # print('vd_encoded:', vd_encoded)
-        # vd_decoded = vd_model.decoder(vd_encoded)
-        # vd_encoded = vd_encoded.to(torch.float16).view(-1, 1, 2048)
-        # vd_tmp = vd_encoded.view(-1,1,2048).to(torch.float16)
-        # all_decoded.append(('vd',vd_decoded))
+        for optimizer in optimizers:
+            optimizer.zero_grad()
 
-        # ts_encoded = ts_model.encoder(inputs['ts'].to(device))
-        # ts_decoded = ts_model.decoder(ts_encoded)
-        # ts_encoded = ts_encoded.to(torch.float16).view(-1, 1, 2048)
-        # ts_tmp = ts_encoded.view(-1,1,2048).to(torch.float16)
-        # all_decoded.append(('ts',ts_decoded))
 
-        n_rad_encoded = n_rad_model.encoder(inputs['n_rad'].to(device))
-        n_rad_decoded = n_rad_model.decoder(n_rad_encoded)
-        n_rad_encoded = n_rad_encoded.to(torch.float16).view(-1, 1, 2048)
-        n_rad_tmp = n_rad_encoded.view(-1,1,2048).to(torch.float16)
-        all_decoded.append(('n_rad',n_rad_decoded))
+        vd_inputs = inputs['vd'].to(device).requires_grad_(True)
+        ts_inputs = inputs['ts_pe'].to(device).requires_grad_(True)
+        n_rad_inputs = inputs['n_rad'].to(device).requires_grad_(True)
 
-        #concat_emb = torch.cat((vd_tmp, ts_tmp, n_rad_tmp), dim=1).to(device)
-        concat_emb = n_rad_tmp.to(device)
-        binary_logits, ternary_logits = custom_output(concat_emb, gemma)
+        encoded_vd = models[0].encoder(vd_inputs)
+        encoded_ts = models[1].encoder(ts_inputs)
+        encoded_n_rad = models[2].encoder(n_rad_inputs)
 
-        loss_bce = custom_bce_loss(binary_logits,ternary_logits,labels.float(),loss_fns)
-        loss_mse = custom_mse_loss(all_decoded, inputs, mse_loss, device)
+        decoded_vd = models[0].decoder(encoded_vd)
+        decoded_ts = models[1].decoder(encoded_ts)
+        decoded_n_rad = models[2].decoder(encoded_n_rad)
+
+        #decoded = [('vd', decoded_vd), ('ts_pe',decoded_ts), ('n_rad', decoded_n_rad)]
+        inputs = [vd_inputs, ts_inputs, n_rad_inputs]
+        decoded = [decoded_vd, decoded_ts, decoded_n_rad]
+
+        concat_emb = torch.cat((encoded_vd.view(-1,1,2048).to(torch.float16), encoded_ts.view(-1,1,2048).to(torch.float16), 
+                                encoded_n_rad.view(-1,1,2048).to(torch.float16)), dim=1).to(device)
+
+        binary_logits, ternary_logits = custom_output(concat_emb, gemma) 
+
+        loss_bce = custom_bce_loss(binary_logits, ternary_logits, labels.float(), loss_fns)
+        loss_mse = custom_mse_loss(decoded, inputs, mse_loss, device)
         loss = loss_bce + beta*loss_mse
 
         loss.backward()
-        #for optimizer in optimizers:
-        #    optimizer.step()
-        optimizers[2].step
+
+        for optimizer in optimizers:
+            optimizer.step()
+        
         train_loss_batches.append(loss.item())
 
-    return vd_model, ts_model, n_rad_model, train_loss_batches
+    return models, train_loss_batches
 
 
-def validate(vd_model, ts_model, n_rad_model, mse_loss, loss_fns, val_loader, device, gemma, beta):
+def validate(models, mse_loss, loss_fns, val_loader, device, gemma, beta):
     val_loss_cum = 0
     val_acc_cum = 0
     preds = []
     list_labels = []
 
-    vd_model.eval()
-    ts_model.eval()
-    n_rad_model.eval()
+    for model in models:
+        model.eval()
+    
     with torch.no_grad():
         for batch_index, (x, y) in enumerate(val_loader, 1):
-            inputs, labels = x.to(device), y.to(device)
+            inputs, labels = x, y.to(device)
 
-            all_decoded = []
-            vd_encoded = vd_model.encoder(inputs['vd'])
-            vd_decoded = vd_model.decoder(vd_encoded)
-            vd_encoded = vd_encoded.to(torch.float16).view(-1, 1, 2048)
-            vd_tmp = vd_encoded.view(-1,1,2048).to(torch.float16)
-            all_decoded.append(('vd',vd_decoded))
+            vd_inputs = x['vd'].to(device)
+            ts_inputs = x['ts_pe'].to(device)
+            n_rad_inputs = x['n_rad'].to(device)
 
-            ts_encoded = ts_model.encoder(inputs['ts'])
-            ts_decoded = ts_model.decoder(ts_encoded)
-            ts_encoded = ts_encoded.to(torch.float16).view(-1, 1, 2048)
-            ts_tmp = ts_encoded.view(-1,1,2048).to(torch.float16)
-            all_decoded.append(('ts',ts_decoded))
+            encoded_vd = model.encoder(vd_inputs).view(-1,1,2048).to(torch.float16)
+            encoded_ts = model.encoder(ts_inputs).view(-1,1,2048).to(torch.float16)
+            encoded_n_rad = model.encoder(n_rad_inputs).view(-1,1,2048).to(torch.float16)
 
-            n_rad_encoded = n_rad_model.encoder(inputs['n_rad'])
-            n_rad_decoded = n_rad_model.decoder(n_rad_encoded)
-            n_rad_encoded = n_rad_encoded.to(torch.float16).view(-1, 1, 2048)
-            n_rad_tmp = n_rad_encoded.view(-1,1,2048).to(torch.float16)
-            all_decoded.append(('n_rad',n_rad_decoded))
+            decoded_vd = model.decoder(encoded_vd)
+            decoded_ts = model.decoder(encoded_ts)
+            decoded_n_rad = model.decoder(encoded_n_rad)
 
-            concat_emb = torch.cat(vd_tmp, ts_tmp, n_rad_tmp)
             binary_logits, ternary_logits = custom_output(concat_emb, gemma)
 
-            loss_bce = custom_bce_loss(binary_logits,ternary_logits,labels,loss_fns)
-            loss_mse = custom_mse_loss(all_decoded, inputs)
+            #decoded = [('vd', decoded_vd), ('ts',decoded_ts), ('n_rad', decoded_n_rad)]
+            decoded = [decoded_vd, decoded_ts, decoded_n_rad]
+
+            concat_emb = torch.cat((encoded_vd, encoded_ts, encoded_n_rad), dim=1).to(device)
+
+            binary_logits, ternary_logits = custom_output(concat_emb, gemma) 
+
+            loss_bce = custom_bce_loss(binary_logits, ternary_logits, labels.float(), loss_fns)
+            loss_mse = custom_mse_loss(decoded, inputs, mse_loss, device)
             loss = loss_bce + beta*loss_mse
 
             hard_preds = output_to_label(binary_logits, ternary_logits)
@@ -360,20 +393,19 @@ def validate(vd_model, ts_model, n_rad_model, mse_loss, loss_fns, val_loader, de
     return val_loss_cum/len(val_loader), preds, list_labels
 
 
-def training_loop(vd_model, ts_model, n_rad_model, optimizers, mse_loss, loss_fns, train_loader, val_loader, num_epochs, gemma, beta):
+def training_loop(models, optimizers, mse_loss, loss_fns, train_loader, val_loader, num_epochs, gemma, beta):
     print("Starting training")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    vd_model.to(device)
-    ts_model.to(device)
-    n_rad_model.to(device)
+
+    for model in models:
+        model.to(device)
+    
     train_losses, val_losses= [], []
-    #best_val_loss = float('inf')
+    best_val_loss = float('inf')
     best_f1 = 0
 
     for epoch in range(1, num_epochs+1):
-        vd_model, ts_model, n_rad_model, train_loss = train_epoch(vd_model,
-                                        ts_model,
-                                        n_rad_model,
+        model, train_loss = train_epoch(models,
                                         optimizers,
                                         mse_loss,
                                         loss_fns,
@@ -381,8 +413,8 @@ def training_loop(vd_model, ts_model, n_rad_model, optimizers, mse_loss, loss_fn
                                         device,
                                         gemma,
                                         beta)
-        val_loss, preds, labels = validate(vd_model, ts_model, n_rad_model, mse_loss, loss_fns, val_loader, device, gemma, beta)
-
+        val_loss, preds, labels = validate(models, mse_loss, loss_fns, val_loader, device, gemma, beta)
+        
         preds_arrays = [t.cpu().numpy() for t in preds]
         preds = np.array(preds_arrays)
 
@@ -391,21 +423,18 @@ def training_loop(vd_model, ts_model, n_rad_model, optimizers, mse_loss, loss_fn
 
         f1_score = metrics.f1_score(labels, preds)
 
-        #scheduler.step(val_loss)
         print(f"Epoch {epoch}/{num_epochs}: "
               f"Train loss: {sum(train_loss)/len(train_loss):.3f}, "
-              f"Val. loss: {val_loss:.3f}, "
-              f"F1-score: {f1_score:.3f}")
+              f"Val. loss: {val_loss:.3f}, ")
         train_losses.append(sum(train_loss)/len(train_loss))
         val_losses.append(val_loss)
-        
-        folder = 'results/auto'
+
+        folder = 'results/auto_vd'
 
         if f1_score > best_f1:
             best_f1 = f1_score
-            torch.save(vd_model, f"{folder}/vd_model.pth")
-            torch.save(ts_model, f"{folder}/ts_model.pth")
-            torch.save(n_rad_model, f"{folder}/n_rad_model.pth")
+            for i,model in enumerate(models):
+                torch.save(model, f"{folder}/model{i}.pth")
 
         with open(f"{folder}/train_losses.pkl", 'wb') as f1:
             pickle.dump(train_losses, f1)
@@ -413,4 +442,4 @@ def training_loop(vd_model, ts_model, n_rad_model, optimizers, mse_loss, loss_fn
         with open(f"{folder}/val_losses.pkl", 'wb') as f3:
             pickle.dump(val_losses, f3)
 
-    return vd_model, ts_model, n_rad_model, train_losses, val_losses
+    return models, train_losses, val_losses
