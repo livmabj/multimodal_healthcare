@@ -138,6 +138,7 @@ class DataSplit():
             # Remove outliers from n_rad-features
             n_rad_columns = [col for col in self.df.columns if col.startswith('n_rad_')]
             self.df = self.df[~(self.df[n_rad_columns] > 10).any(axis=1)]
+            self.df = self.df.dropna()
 
         elif partition == 'mortality':
 
@@ -190,8 +191,15 @@ class DataSplit():
         self.x_val = self.df[self.df['haim_id'].isin(validation_idx)].drop(['y','haim_id'],axis=1)
         
         # Normalize according to mean and std of training set
-        self.x_train = (self.x_train - self.x_train.mean())/self.x_train.std()
-        self.x_val = (self.x_val - self.x_train.mean())/self.x_train.std()
+        for column in self.x_train.columns:
+            mean = self.x_train[column].mean()
+            std = self.x_train[column].std()
+            
+            if std != 0:
+                self.x_train[column] = (self.x_train[column] - mean) / std
+                self.x_val[column] = (self.x_val[column] - mean) / std
+            else:
+                continue
 
         self.y_train = self.df[self.df['haim_id'].isin(train_idx)]['y']
         self.y_val = self.df[self.df['haim_id'].isin(validation_idx)]['y']
