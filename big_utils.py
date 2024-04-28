@@ -295,9 +295,9 @@ def output_to_label(binary_logits, ternary_logits, labels):
         probs_tensor = F.softmax(logits_tensor, dim=1)
         max_probs, max_indices = torch.max(probs_tensor, dim=1)
 
-        probs.append(max_probs)
+        probs.append(probs_tensor)
         preds.append(max_indices)
-
+        
     probs_tensor = torch.stack(probs)
     preds_tensor = torch.stack(preds)
     transposed_labels = labels.transpose(0, 1)
