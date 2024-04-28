@@ -28,7 +28,7 @@ df = pd.read_csv(fname)
 
 
 # Load train/val sets and create data loaders
-batch_size = 8
+batch_size = 32
 
 Data = DataSplit(df)
 Data.split_data('all')
@@ -64,24 +64,33 @@ train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, num_wo
 val_loader = DataLoader(val_set, batch_size=batch_size, num_workers=5)
 
 
-
 # Setting model and hyperparameters
 vd_model = AutoEncoder(1024,2048)
-ts_model = AutoEncoder(110,2048)
+vmd_model = AutoEncoder(1024,2048)
+
+ts_pe_model = AutoEncoder(110,2048)
+ts_ce_model = AutoEncoder(99,2048)
+ts_le_model = AutoEncoder(242,2048)
+
 n_rad_model = AutoEncoder(768,2048)
-models = [vd_model, ts_model, n_rad_model]
+models = [vd_model, vmd_model, ts_pe_model, ts_ce_model, ts_le_model, n_rad_model]
 
 vd_optimizer = optim.Adam(vd_model.parameters(), lr=0.0005, weight_decay=0.0003)
-ts_optimizer = optim.Adam(ts_model.parameters(), lr=0.0005, weight_decay=0.0003)
+vmd_optimizer = optim.Adam(vmd_model.parameters(), lr=0.0005, weight_decay=0.0003)
+
+ts_pe_optimizer = optim.Adam(ts_pe_model.parameters(), lr=0.0005, weight_decay=0.0003)
+ts_ce_optimizer = optim.Adam(ts_ce_model.parameters(), lr=0.0005, weight_decay=0.0003)
+ts_le_optimizer = optim.Adam(ts_le_model.parameters(), lr=0.0005, weight_decay=0.0003)
+
 n_rad_optimizer = optim.Adam(n_rad_model.parameters(), lr=0.0005, weight_decay=0.0003)
-optimizers = [vd_optimizer, ts_optimizer, n_rad_optimizer]
+optimizers = [vd_optimizer, vmd_optimizer, ts_pe_optimizer, ts_ce_optimizer, ts_le_optimizer, n_rad_optimizer]
 
 loss_mse = nn.MSELoss()
 loss_fns = []
 for weight in weight_per_class:
     loss_fns.append(nn.CrossEntropyLoss(weight=weight))
 
-num_epochs = 2
+num_epochs = 50
 beta = 0.1
 
 # Run training

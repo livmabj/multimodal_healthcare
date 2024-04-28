@@ -239,7 +239,7 @@ def binary_loss(logits, labels, loss_fns):
 
 
 def ternary_loss(logits, labels, loss_fns):
-    batch_size = logits.size(0)
+    batch_size = labels.size(0)
     num_classes = 10
     labels = labels[:, :-2]
 
@@ -282,7 +282,7 @@ def custom_mse_loss(decoded, inputs, mse_loss, device):
 
 
 def output_to_label(binary_logits, ternary_logits, labels):
-    batch_size = logits.size(0)
+    batch_size = labels.size(0)
     num_classes = 10
     probs = []
     preds = []
@@ -305,6 +305,30 @@ def output_to_label(binary_logits, ternary_logits, labels):
     return probs_tensor, preds_tensor, transposed_labels
 
 
+def accuracy_score(probabilities, hard_preds, labels):
+    per_class_probs = [[] for _ in range(12)]
+    per_class_preds = [[] for _ in range(12)]
+    per_class_labels = [[] for _ in range(12)]
+
+    for i, class_tensor in enumerate(hard_preds):
+            per_class_preds[i].append(class_tensor)
+            per_class_labels[i].append(labels[i])
+            per_class_probs[i].append(probabilities[i])
+        
+        
+    per_class_acc_batch_avg = []
+    for i,hard_preds in enumerate(per_class_preds):
+        mask = torch.isnan(per_class_labels[i][0])
+        masked_labels = per_class_labels[i][0][~mask]
+        masked_preds = hard_preds[0][~mask]
+        if len(masked_labels) == 0:
+            continue
+        else:
+            per_class_acc_batch_avg.append((masked_preds == masked_labels).float().mean().item())
+    
+    acc_batch_avg = sum(per_class_acc_batch_avg) / len(per_class_acc_batch_avg)
+
+    return per_class_preds, per_class_labels, acc_batch_avg
 
 
 
@@ -320,8 +344,7 @@ def train_epoch(models, optimizers, mse_loss, loss_fns, train_loader, device, ge
     # Train:
     for model in models:
         model.train()
-    
-    train_loss_batches = []
+    train_loss_batches, train_acc_batches = [], []
     for batch_index, (x, y) in enumerate(train_loader, 1):
         inputs, labels = x, y.to(device)
 
@@ -369,20 +392,23 @@ def train_epoch(models, optimizers, mse_loss, loss_fns, train_loader, device, ge
         for optimizer in optimizers:
             optimizer.step()
         
+
+        probabilities, hard_preds, labels = output_to_label(binary_logits, ternary_logits, labels)
+        _, _, acc_batch_avg = accuracy_score(probabilities, hard_preds, labels)
+
+        train_acc_batches.append(acc_batch_avg)
+
         train_loss_batches.append(loss.item())
 
-    return model, train_loss_batches
+    return model, train_loss_batches, train_acc_batches
 
 
 def validate(models, mse_loss, loss_fns, val_loader, device, gemma, beta):
     val_loss_cum = 0
     val_acc_cum = 0
-    preds = []
-    list_labels = []
 
     for model in models:
         model.eval()
-    
     with torch.no_grad():
         for batch_index, (x, y) in enumerate(val_loader, 1):
             inputs, labels = x, y.to(device)
@@ -422,15 +448,14 @@ def validate(models, mse_loss, loss_fns, val_loader, device, gemma, beta):
             loss_mse = custom_mse_loss(decoded, inputs, mse_loss, device)
             loss = loss_bce + beta*loss_mse
 
+            probabilities, hard_preds, labels = output_to_label(binary_logits, ternary_logits, labels)
 
-            probabilities, hard_preds = output_to_label(binary_logits, ternary_logits, labels)
+            per_class_preds, per_class_labels, acc_batch_avg = accuracy_score(probabilities, hard_preds, labels)
 
-            preds.extend(hard_preds)
-            list_labels.extend(labels)
-
+            val_acc_cum += acc_batch_avg
             val_loss_cum += loss.item()
 
-    return val_loss_cum/len(val_loader)
+    return val_loss_cum/len(val_loader), val_acc_cum/len(val_loader), per_class_preds, per_class_labels
 
 
 def training_loop(models, optimizers, mse_loss, loss_fns, train_loader, val_loader, num_epochs, gemma, beta):
@@ -440,12 +465,12 @@ def training_loop(models, optimizers, mse_loss, loss_fns, train_loader, val_load
     for model in models:
         model.to(device)
     
-    train_losses, val_losses= [], []
-    best_val_loss = float('inf')
-    #best_f1 = 0
+    train_losses, train_accs, val_losses, val_accs = [], [], [], []
+    #best_val_loss = float('inf')
+    best_f1 = 0
 
     for epoch in range(1, num_epochs+1):
-        model, train_loss = train_epoch(models,
+        model, train_loss, train_acc = train_epoch(models,
                                         optimizers,
                                         mse_loss,
                                         loss_fns,
@@ -453,37 +478,53 @@ def training_loop(models, optimizers, mse_loss, loss_fns, train_loader, val_load
                                         device,
                                         gemma,
                                         beta)
-        val_loss = validate(models, mse_loss, loss_fns, val_loader, device, gemma, beta)
+        val_loss, val_acc, per_class_preds, per_class_labels = validate(models, mse_loss, loss_fns, val_loader, device, gemma, beta)
         
-        #preds_arrays = [t.cpu().numpy() for t in preds]
-        #preds = np.array(preds_arrays)
+        f1_scores = []
+        for i,class_preds in enumerate(per_class_preds):
+            preds_arrays = [t.cpu().numpy() for t in class_preds]
+            preds = np.concatenate(preds_arrays)
 
-        #labels_arrays = [t.cpu().numpy() for t in labels]
-        #labels = np.array(labels_arrays)
+            labels_arrays = [t.cpu().numpy() for t in per_class_labels[i]]
+            labels = np.concatenate(labels_arrays)
+            mask = np.isnan(labels)
+            masked_labels = labels[~mask]
+            masked_preds = preds[~mask]
+            f1_scores.append(metrics.f1_score(masked_labels, masked_preds, average='micro'))
 
-        #f1_score = metrics.f1_score(labels, preds)
+        f1_avg = sum(f1_scores) / len(f1_scores)
 
         print(f"Epoch {epoch}/{num_epochs}: "
               f"Train loss: {sum(train_loss)/len(train_loss):.3f}, "
-              f"Val. loss: {val_loss:.3f}, ")
+              f"Train acc.: {sum(train_acc)/len(train_acc):.3f}, "
+              f"Val. loss: {val_loss:.3f}, "
+              f"Val. acc.: {val_acc:.3f}")
         train_losses.append(sum(train_loss)/len(train_loss))
+        train_accs.append(sum(train_acc)/len(train_acc))
         val_losses.append(val_loss)
+        val_accs.append(val_acc)
 
-        folder = 'multiresult/test1'
+        folder = 'multiresult/test3'
 
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            torch.save(model[0], f"{folder}/vd.pth")
-            torch.save(model[1], f"{folder}/vd.pth")
-            torch.save(model[2], f"{folder}/vd.pth")
-            torch.save(model[3], f"{folder}/vd.pth")
-            torch.save(model[4], f"{folder}/vd.pth")
-            torch.save(model[5], f"{folder}/vd.pth")
+        if f1_avg > best_f1:
+            best_f1 = f1_avg
+            torch.save(models[0], f"{folder}/vd.pth")
+            torch.save(models[1], f"{folder}/vmd.pth")
+            torch.save(models[2], f"{folder}/ts_pe.pth")
+            torch.save(models[3], f"{folder}/ts_ce.pth")
+            torch.save(models[4], f"{folder}/ts_le.pth")
+            torch.save(models[5], f"{folder}/n_rad.pth")
 
         with open(f"{folder}/train_losses.pkl", 'wb') as f1:
             pickle.dump(train_losses, f1)
 
+        with open(f"{folder}/train_accs.pkl", 'wb') as f2:
+            pickle.dump(train_accs, f2)
+
         with open(f"{folder}/val_losses.pkl", 'wb') as f3:
             pickle.dump(val_losses, f3)
+
+        with open(f"{folder}/val_accs.pkl", 'wb') as f4:
+            pickle.dump(val_accs, f4)
 
     return model, train_losses, val_losses
