@@ -297,29 +297,28 @@ def output_to_label(binary_logits, ternary_logits, labels):
 
         probs.append(probs_tensor)
         preds.append(max_indices)
-        
-    probs_tensor = torch.stack(probs)
+
+    #probs_tensor = torch.stack(probs)
     preds_tensor = torch.stack(preds)
     transposed_labels = labels.transpose(0, 1)
 
-    return probs_tensor, preds_tensor, transposed_labels
+    return probs, preds_tensor, transposed_labels
 
 
-def accuracy_score(probabilities, hard_preds, labels):
-    per_class_probs = [[] for _ in range(12)]
-    per_class_preds = [[] for _ in range(12)]
-    per_class_labels = [[] for _ in range(12)]
+def accuracy_scores(probabilities, hard_preds, labels):
+    batch_per_class_probs = [[] for _ in range(12)]
+    batch_per_class_preds = [[] for _ in range(12)]
+    batch_per_class_labels = [[] for _ in range(12)]
 
     for i, class_tensor in enumerate(hard_preds):
-            per_class_preds[i].append(class_tensor)
-            per_class_labels[i].append(labels[i])
-            per_class_probs[i].append(probabilities[i])
-        
+            batch_per_class_preds[i].append(class_tensor)
+            batch_per_class_labels[i].append(labels[i])
+            batch_per_class_probs[i].append(probabilities[i])
         
     per_class_acc_batch_avg = []
-    for i,hard_preds in enumerate(per_class_preds):
-        mask = torch.isnan(per_class_labels[i][0])
-        masked_labels = per_class_labels[i][0][~mask]
+    for i,hard_preds in enumerate(batch_per_class_preds):
+        mask = torch.isnan(batch_per_class_labels[i][0])
+        masked_labels = batch_per_class_labels[i][0][~mask]
         masked_preds = hard_preds[0][~mask]
         if len(masked_labels) == 0:
             continue
@@ -328,7 +327,7 @@ def accuracy_score(probabilities, hard_preds, labels):
     
     acc_batch_avg = sum(per_class_acc_batch_avg) / len(per_class_acc_batch_avg)
 
-    return per_class_preds, per_class_labels, acc_batch_avg
+    return acc_batch_avg
 
 
 
@@ -406,6 +405,9 @@ def train_epoch(models, optimizers, mse_loss, loss_fns, train_loader, device, ge
 def validate(models, mse_loss, loss_fns, val_loader, device, gemma, beta):
     val_loss_cum = 0
     val_acc_cum = 0
+    per_class_probs = [[] for _ in range(12)]
+    per_class_preds = [[] for _ in range(12)]
+    per_class_labels = [[] for _ in range(12)]
 
     for model in models:
         model.eval()
@@ -450,7 +452,12 @@ def validate(models, mse_loss, loss_fns, val_loader, device, gemma, beta):
 
             probabilities, hard_preds, labels = output_to_label(binary_logits, ternary_logits, labels)
 
-            per_class_preds, per_class_labels, acc_batch_avg = accuracy_score(probabilities, hard_preds, labels)
+            for i, class_tensor in enumerate(hard_preds):
+                per_class_preds[i].append(class_tensor)
+                per_class_labels[i].append(labels[i])
+                per_class_probs[i].append(probabilities[i])
+
+            acc_batch_avg = accuracy_scores(probabilities, hard_preds, labels)
 
             val_acc_cum += acc_batch_avg
             val_loss_cum += loss.item()
