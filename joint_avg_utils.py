@@ -39,65 +39,6 @@ class AutoEncoder(nn.Module):
 
 
 
-class AsymmetricLoss(nn.Module):
-    def __init__(self, gamma_neg=1, gamma_pos=4, clip=0.05, eps=1e-6, disable_torch_grad_focal_loss=True):
-        super(AsymmetricLoss, self).__init__()
-
-        self.gamma_neg = gamma_neg
-        self.gamma_pos = gamma_pos
-        self.clip = clip
-        self.disable_torch_grad_focal_loss = disable_torch_grad_focal_loss
-        self.eps = eps
-
-    def forward(self, x, y):
-        """"
-        Parameters
-        ----------
-        x: input logits
-        y: targets (multi-label binarized vector)
-        """
-
-        # Mask NaN and 2 labels
-        mask = ~(torch.isnan(y) | (y == 2))
-        x = x[mask]
-        y = y[mask]
-
-        # Calculating Probabilities
-        x_sigmoid = torch.sigmoid(x)
-        xs_pos = x_sigmoid
-        xs_neg = 1 - x_sigmoid
-
-        # Asymmetric Clipping
-        if self.clip is not None and self.clip > 0:
-            xs_neg = (xs_neg + self.clip).clamp(max=1)
-
-        # Basic CE calculation
-        los_pos = y * torch.log(xs_pos.clamp(min=self.eps))
-        los_neg = (1 - y) * torch.log(xs_neg.clamp(min=self.eps))
-        loss = los_pos + los_neg
-
-        # Asymmetric Focusing
-        if self.gamma_neg > 0 or self.gamma_pos > 0:
-            if self.disable_torch_grad_focal_loss:
-                torch.set_grad_enabled(False)
-            pt0 = xs_pos * y
-            pt1 = xs_neg * (1 - y)  # pt = p if t > 0 else 1-p
-            pt = pt0 + pt1
-            one_sided_gamma = self.gamma_pos * y + self.gamma_neg * (1 - y)
-            one_sided_w = torch.pow(1 - pt, one_sided_gamma)
-            if self.disable_torch_grad_focal_loss:
-                torch.set_grad_enabled(True)
-            loss *= one_sided_w
-
-        return -loss.sum()
-
-
-
-
-
-
-
-
 ####
 ####
 ####
@@ -275,6 +216,23 @@ def custom_output(emb, gemma):
     return logits
 
 
+def custom_bce_loss(logits, labels, loss_fns):
+    losses = []
+    class_tensors = torch.split(logits, 1, dim=1)
+    class_labels = torch.split(labels, 1, dim=1)
+    for i, fn in enumerate(loss_fns):
+        mask = ~torch.isnan(class_labels[i]) & (class_labels[i] != 2)
+        masked_labels = class_labels[i][mask]
+        masked_logits = class_tensors[i][mask]
+        if masked_labels.size(0) == 0:
+            losses.append(0.0)
+        else:
+            losses.append(fn(masked_logits, masked_labels))
+
+    loss = sum(losses) / 12
+
+    return loss
+
 
 def custom_mse_loss(decoded, inputs, mse_loss):
 
@@ -318,10 +276,10 @@ def output_to_label(logits, labels):
 
 
 
-#######     JOINT TRAINING WITH ASYMMETRIC LOSS ########
+#######     JOINT TRAINING WITH AVERAGED LOSS ########
 
 
-def train_epoch(models, optimizers, mse_loss, loss_fns, train_loader, device, gemma, beta, assymetric_loss):
+def train_epoch(models, optimizers, mse_loss, loss_fns, train_loader, device, gemma, beta):
     # Train:
     for model in models:
         model.train()
@@ -364,15 +322,13 @@ def train_epoch(models, optimizers, mse_loss, loss_fns, train_loader, device, ge
 
         logits = custom_output(concat_emb, gemma) 
 
-        assym_loss = assymetric_loss.forward(logits, labels.float())
-        #loss_bce = custom_bce_loss(binary_logits, ternary_logits, labels.float(), loss_fns)
+        loss_bce = custom_bce_loss(logits, labels.float(), loss_fns)
         loss_mse = custom_mse_loss(decoded, inputs, mse_loss)
-        loss = assym_loss + beta*loss_mse
+        loss = loss_bce + beta*loss_mse
 
         loss.backward()
 
-        for i, optimizer in enumerate(optimizers):
-            torch.nn.utils.clip_grad_norm_(models[i].parameters(), max_norm=1.0)
+        for optimizer in optimizers:
             optimizer.step()
         
         train_loss_batches.append(loss.item())
@@ -380,7 +336,7 @@ def train_epoch(models, optimizers, mse_loss, loss_fns, train_loader, device, ge
     return models, train_loss_batches
 
 
-def validate(models, mse_loss, loss_fns, val_loader, device, gemma, beta, assymetric_loss):
+def validate(models, mse_loss, loss_fns, val_loader, device, gemma, beta):
     val_loss_cum = 0
     val_acc_cum = 0
     per_class_probs = [[] for _ in range(12)]
@@ -417,23 +373,23 @@ def validate(models, mse_loss, loss_fns, val_loader, device, gemma, beta, assyme
             inputs = [vd_inputs, vmd_inputs, ts_pe_inputs, ts_ce_inputs, ts_le_inputs, n_rad_inputs]
             decoded = [decoded_vd, decoded_vmd, decoded_ts_pe, decoded_ts_ce, decoded_ts_le, decoded_n_rad]
 
-            concat_emb = torch.cat((encoded_vd.view(-1,1,3072).to(torch.bfloat16), encoded_vmd.view(-1,1,3072).to(torch.bfloat16), 
-                                encoded_ts_pe.view(-1,1,3072).to(torch.bfloat16), encoded_ts_ce.view(-1,1,3072).to(torch.bfloat16), 
-                                encoded_ts_le.view(-1,1,3072).to(torch.bfloat16), encoded_n_rad.view(-1,1,3072).to(torch.bfloat16)),
+            concat_emb = torch.cat((encoded_vd.view(-1,1,2048).to(torch.float16), encoded_vmd.view(-1,1,2048).to(torch.float16), 
+                                encoded_ts_pe.view(-1,1,2048).to(torch.float16), encoded_ts_ce.view(-1,1,2048).to(torch.float16), 
+                                encoded_ts_le.view(-1,1,2048).to(torch.float16), encoded_n_rad.view(-1,1,2048).to(torch.float16)),
                                   dim=1).to(device)
 
             logits = custom_output(concat_emb, gemma) 
 
-            assym_loss = assymetric_loss.forward(logits, labels.float())
+            loss_bce = custom_bce_loss(logits, labels.float(), loss_fns)
             loss_mse = custom_mse_loss(decoded, inputs, mse_loss)
-            loss = assym_loss + beta*loss_mse
+            loss = loss_bce + beta*loss_mse
 
             val_loss_cum += loss.item()
 
     return val_loss_cum/len(val_loader) #, val_acc_cum/len(val_loader), per_class_preds, per_class_labels
 
 
-def training_loop(models, optimizers, mse_loss, loss_fns, train_loader, val_loader, num_epochs, gemma, beta, assymetric_loss):
+def training_loop(models, optimizers, mse_loss, loss_fns, train_loader, val_loader, num_epochs, gemma, beta):
     print("Starting training")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -452,9 +408,8 @@ def training_loop(models, optimizers, mse_loss, loss_fns, train_loader, val_load
                                         train_loader,
                                         device,
                                         gemma,
-                                        beta,
-                                        assymetric_loss)
-        val_loss = validate(models, mse_loss, loss_fns, val_loader, device, gemma, beta, assymetric_loss)
+                                        beta)
+        val_loss = validate(models, mse_loss, loss_fns, val_loader, device, gemma, beta)
         
         print(f"Epoch {epoch}/{num_epochs}: "
               f"Train loss: {sum(train_loss)/len(train_loss):.3f}, "
@@ -464,7 +419,7 @@ def training_loop(models, optimizers, mse_loss, loss_fns, train_loader, val_load
         val_losses.append(val_loss)
         #val_accs.append(val_acc)
 
-        folder = 'multiresult/test1'
+        folder = 'multiresult/joint_average'
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
@@ -485,5 +440,3 @@ def training_loop(models, optimizers, mse_loss, loss_fns, train_loader, val_load
             pickle.dump(val_accs, f3)
 
     return model, train_losses, val_losses
-
-    
