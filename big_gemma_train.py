@@ -10,7 +10,7 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
-from big_utils import *
+from joint_utils import *
 
 # Filepath to embeddings
 fname = '/mnt/mimic/data/HAIM/mimic_extras/embeddings.csv'
@@ -49,10 +49,11 @@ weight_per_class = []
 
 for y in transposed_Y[:-2]:
     y = torch.tensor(y)
+    mask = ~torch.isnan(y) & (y != 2)
+    y = y[mask]
     w0 = len(y)/(2*sum(y == 0))
     w1 = len(y)/(2*sum(y == 1))
-    w2 = len(y)/(2*sum(y == 2))
-    weight_per_class.append(torch.tensor([w0, w1, w2], dtype = torch.float).to("cuda"))
+    weight_per_class.append(torch.tensor([w0, w1], dtype = torch.float).to("cuda"))
 
 for y in transposed_Y[-2:]:
     y = torch.tensor(y)

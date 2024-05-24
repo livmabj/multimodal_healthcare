@@ -580,3 +580,59 @@ def training_loop(models, optimizers, mse_loss, loss_fns, train_loader, val_load
             pickle.dump(val_accs, f3)
 
     return model, train_losses, val_losses
+
+
+def output_to_label_predict(logits, labels):
+
+    probs_tensor_pos = F.sigmoid(logits)
+
+    pred = torch.round(probs_tensor_pos)
+
+    probs_tensor_neg = 1-probs_tensor_pos
+
+    prob = torch.stack((probs_tensor_neg, probs_tensor_pos), dim=1)
+
+
+    return prob, pred, labels
+
+def predict_from_all(types_and_models, val_loader, gemma):
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    per_class_probs = [[] for _ in range(12)]
+    per_class_preds = [[] for _ in range(12)]
+    per_class_labels = [[] for _ in range(12)]
+
+    types, models = zip(*types_and_models)
+
+    types = list(types)
+    models = list(models)
+
+    for model in models:
+        model.eval()
+    with torch.no_grad():
+        for batch_index, (x, y) in enumerate(val_loader, 1):
+            inputs, labels = x, y.to(device)
+
+            encoded = []
+            decoded = []
+            for i,model in enumerate(models):
+                type_inputs = inputs[types[i]].to(device)
+                enc = model.encoder(type_inputs)
+                dec = model.decoder(enc)
+                encoded.append(enc.view(-1,1,2048).to(torch.float16))
+                decoded.append(dec)
+
+            concat_emb = torch.cat(encoded, dim=1).to(device)
+
+            logits = custom_output(concat_emb, gemma)
+
+            probabilities, hard_preds, labels = output_to_label_predict(logits, labels)
+
+            for i in range(probabilities.size(2)):
+                class_prob = probabilities[:, :, i]  # Select probabilities for class i
+                per_class_probs[i].append(probabilities[:, :, i])
+                per_class_preds[i].append(hard_preds[:, i])
+                per_class_labels[i].append(labels[:, i])
+
+    return per_class_preds, per_class_labels, per_class_probs
